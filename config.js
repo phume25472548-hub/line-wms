@@ -4,10 +4,10 @@
  */
 window.APP_CONFIG = {
   // LIFF ID จาก LINE Developers > LINE Login channel > LIFF  เช่น '2001234567-AbCdEfGh'
-  LIFF_ID: 'YOUR_LIFF_ID',
+  LIFF_ID: '2012121135-ER2PTeHe',
 
   // URL ของ Google Apps Script Web App ที่ลงท้ายด้วย /exec
-  API_URL: 'https://script.google.com/macros/s/YOUR_DEPLOYMENT_ID/exec',
+  API_URL: 'https://script.google.com/macros/s/AKfycbwsTs_RHZUIDWjCFAkgAA-r_vRFTlnTKHoci0-e6pyqJS-4M7ApQjArUavRFkra2a3J/exec',
 
   // เวลารอคำตอบสูงสุดต่อครั้ง (มิลลิวินาที)
   REQUEST_TIMEOUT_MS: 30000
