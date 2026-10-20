@@ -1,5 +1,5 @@
 /* LINE WMS — LIFF Frontend (Vanilla JS)
- * หน้าจอทั้งหมดของพนักงาน: รับเข้า ขายออก รับคืน ส่งคืน ตัดเสีย เช็กสต๊อก ตรวจนับ ประวัติ Dashboard และตั้งค่า
+ * หน้าจอทั้งหมดของพนักงาน: รับเข้า ขายออก รับคืน ส่งคืน ตัดเสีย เช็กสต๊อก ตรวจนับ ประวัติ Dashboard ตั้งค่า และการเงิน (ADMIN)
  * หลักความปลอดภัย: หน้าจอส่งเฉพาะ LINE ID Token ไปให้ Server ตรวจ ไม่ส่ง/ไม่เชื่อ User ID เอง
  */
 (function () {
@@ -37,7 +37,10 @@
     x: '<path d="M18 6L6 18M6 6l12 12"/>',
     alert: '<path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/>',
     refresh: '<path d="M21 12a9 9 0 11-3-6.7L21 8"/><path d="M21 3v5h-5"/>',
-    home: '<path d="M3 11l9-8 9 8v9a1 1 0 01-1 1h-5v-6H9v6H4a1 1 0 01-1-1z"/>'
+    home: '<path d="M3 11l9-8 9 8v9a1 1 0 01-1 1h-5v-6H9v6H4a1 1 0 01-1-1z"/>',
+    coin: '<circle cx="12" cy="12" r="9"/><path d="M15 9.5c-.4-1-1.6-1.6-3-1.6-1.7 0-3 .9-3 2.1s1.3 1.8 3 2.1 3 .9 3 2.1-1.3 2.1-3 2.1c-1.4 0-2.6-.6-3-1.6M12 6v2m0 8v2"/>',
+    box: '<path d="M21 8l-9-5-9 5v8l9 5 9-5z"/><path d="M3 8l9 5 9-5M12 13v8"/>',
+    chev: '<path d="M9 6l6 6-6 6"/>'
   };
   function icon(name) {
     var s = document.createElement('span');
@@ -809,6 +812,7 @@
       [can.write, 'ผลตรวจสอบ', 'ย้ายของรอตรวจ', 'shield', 'c-amber', viewInspect],
       [can.write, 'ยกเลิกออเดอร์', 'คืนสต๊อกออเดอร์', 'xc', 'c-red', viewCancel],
       [true, 'Dashboard', 'สรุปภาพรวม', 'chart', 'c-blue', viewDashboard],
+      [can.admin, 'การเงิน', 'ต้นทุน ยอดเงิน กำไร', 'coin', 'c-green', viewFinance],
       [can.admin, 'ตั้งค่าระบบ', 'ช่องทาง พนักงาน สินค้า', 'gear', 'c-gray', viewAdmin]
     ];
     var initial = (u.name || '?').trim().charAt(0);
@@ -818,7 +822,7 @@
       el('div', { class: 'who' },
         u.picture ? el('img', { class: 'avatar', src: u.picture, alt: '' }) : el('div', { class: 'avatar' }, initial),
         el('div', { class: 'grow' }, el('div', { style: 'font-weight:600' }, u.name), el('span', { class: 'role-badge' }, ROLE_LABEL[u.role] || u.role)))));
-    var pg = el('div', { class: 'page' });
+    var pg = el('div', { class: 'page page-home' });
     if (Pending.get()) {
       append(pg, el('button', { class: 'banner warn', style: 'border:0;width:100%;text-align:left;cursor:pointer', onclick: function () { checkPending(true).then(function () { render(); }); } },
         icon('alert'), el('div', null, 'มีรายการที่ยังไม่ทราบผลการบันทึก แตะเพื่อตรวจสอบ')));
@@ -1360,6 +1364,362 @@
     }
     page(app, 'Dashboard', out, null, el('button', { class: 'icon-btn', 'aria-label': 'รีเฟรช', onclick: load }, icon('refresh')));
     load();
+  }
+
+  /* ================================================================ */
+  /* การเงิน (ADMIN เท่านั้น) — ต้นทุนสินค้า / ยอดเงินที่ได้รับ / กำไรต่อออเดอร์  */
+  /* ================================================================ */
+  function money(n) {
+    var v = Number(n || 0);
+    return v.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  function parseMoney(s) {
+    var t = String(s == null ? '' : s).replace(/[,\s฿]/g, '');
+    if (t === '' || !/^\d+(\.\d{1,2})?$/.test(t)) return null;
+    return Number(t);
+  }
+  function moneyInput(value, placeholder) {
+    return el('input', { class: 'input money-in', type: 'text', inputmode: 'decimal', autocomplete: 'off', placeholder: placeholder || '0.00', value: value == null ? '' : String(value) });
+  }
+  function profitColor(p) { return p < 0 ? 'var(--danger)' : 'var(--brand-dark)'; }
+  function loadingBox() { return el('div', { class: 'empty' }, el('div', { class: 'spinner', style: 'margin:0 auto' })); }
+  function errorBox(e) { return el('div', { class: 'banner error' }, icon('alert'), el('div', null, e.message)); }
+
+  function costForm(item) {
+    return sheet(function (close) {
+      var inp = moneyInput(item.unitCost, 'ต้นทุนต่อ ' + item.unit);
+      inp.setAttribute('autofocus', '');
+      var note = el('input', { class: 'input', maxLength: 200, value: item.note || '', placeholder: 'เช่น ล็อตตู้ 10/2026 รวมค่าขนส่ง' });
+      var err = el('div', { class: 'err-text' });
+      var save = el('button', { class: 'btn btn-primary btn-block btn-lg' }, 'บันทึกต้นทุน');
+      function doSave() {
+        var v = parseMoney(inp.value);
+        if (v == null) { err.textContent = 'กรุณาใส่ตัวเลข 0 ขึ้นไป (ทศนิยมไม่เกิน 2 ตำแหน่ง)'; return; }
+        save.disabled = true; err.textContent = '';
+        submitWrite('finance.cost.save', { sku: item.sku, unitCost: v, note: note.value.trim() }, 'ต้นทุน ' + item.sku)
+          .then(function (d) { if (d) { toast(d.message, 'ok'); close(true); } else close(false); })
+          .catch(function (e) { save.disabled = false; err.textContent = e.message; beep(false); });
+      }
+      save.addEventListener('click', doSave);
+      inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); doSave(); } });
+      return [el('h2', null, 'ต้นทุนต่อชิ้น'),
+        el('div', null, el('div', { style: 'font-weight:600' }, item.name), el('div', { class: 'small muted mono' }, item.sku)),
+        el('div', { class: 'field' }, el('label', null, 'ต้นทุนต่อ ' + item.unit + ' (บาท)'), inp),
+        el('div', { class: 'hint' }, 'สินค้านำเข้าจากจีน: รวมราคาซื้อ + ค่าขนส่งจีน-ไทยเฉลี่ยต่อชิ้น + ภาษีนำเข้า + ค่าส่งในไทย'),
+        el('div', { class: 'field' }, el('label', null, 'หมายเหตุ (ถ้ามี)'), note),
+        item.updatedAt ? el('div', { class: 'small muted' }, 'แก้ล่าสุด ' + item.updatedAt + ' โดย ' + item.updatedBy) : null,
+        err, save, el('button', { class: 'btn btn-outline btn-block', onclick: function () { close(false); } }, 'ยกเลิก')];
+    });
+  }
+
+  /** หน้ารวมเมนูการเงิน */
+  function viewFinance(app) {
+    var out = el('div', { style: 'display:flex;flex-direction:column;gap:12px' });
+    page(app, 'การเงิน', [
+      el('div', { class: 'banner info' }, icon('shield'), el('div', null, 'เมนูนี้เห็นเฉพาะผู้ดูแลระบบ พนักงานไม่เห็นต้นทุนและกำไร')),
+      out
+    ]);
+    append(out, loadingBox());
+    Api.read('finance.summary', {}).then(function (d) {
+      clear(out);
+      function big(n, label, sub, color, onclick) {
+        return el('button', { class: 'list-btn fin-big', onclick: onclick },
+          el('div', { class: 'fin-num', style: 'color:' + color }, fmt(n)),
+          el('div', { class: 'grow' }, el('div', { style: 'font-weight:600' }, label), el('div', { class: 'small muted' }, sub)),
+          icon('chev'));
+      }
+      append(out, [
+        big(d.pendingCount, 'ออเดอร์รอบันทึกยอดเงิน', 'ส่งของแล้ว ยังไม่ได้กรอกเงินที่ได้รับ', d.pendingCount ? 'var(--warn)' : 'var(--ink-3)', function () { go(viewFinPending); }),
+        big(d.missingCostCount, 'สินค้ายังไม่มีต้นทุน', 'จากสินค้าที่ใช้งาน ' + fmt(d.activeProductCount) + ' รายการ', d.missingCostCount ? 'var(--danger)' : 'var(--ink-3)', function () { go(viewFinCosts, { onlyMissing: true }); }),
+        big(d.recordedCount, 'กำไรต่อออเดอร์', d.lossCount ? 'ขาดทุน ' + fmt(d.lossCount) + ' ออเดอร์' : 'ออเดอร์ที่บันทึกยอดเงินแล้ว', 'var(--brand-dark)', function () { go(viewFinRecords); }),
+        el('button', { class: 'list-btn fin-big', onclick: function () { go(viewFinCosts, {}); } },
+          el('div', { class: 'fin-num' }, el('div', { class: 'ic c-blue fin-ic' }, icon('coin'))),
+          el('div', { class: 'grow' }, el('div', { style: 'font-weight:600' }, 'ต้นทุนสินค้า'), el('div', { class: 'small muted' }, 'กรอก/แก้ต้นทุนต่อชิ้นของสินค้าทุกตัว')),
+          icon('chev')),
+        el('div', { class: 'card' }, el('h3', null, 'บันทึกล่าสุด'),
+          d.recent.length ? d.recent.map(finRecordRow) : el('div', { class: 'empty' }, 'ยังไม่มีการบันทึกยอดเงิน'))
+      ]);
+    }).catch(function (e) { clear(out); append(out, errorBox(e)); });
+  }
+
+  function finRecordRow(r) {
+    return el('button', { class: 'fin-row', onclick: function () { go(viewFinPayment, { internalOrderId: r.internalOrderId }); } },
+      el('div', { class: 'grow' },
+        el('div', { class: 'mono', style: 'font-weight:600;word-break:break-all' }, r.orderNo),
+        el('div', { class: 'small muted' }, r.channelName + ' · รับเงิน ' + r.receivedDate + (r.orderStatus === 'CANCELLED' ? ' · ยกเลิกแล้ว' : ''))),
+      el('div', { class: 'right' },
+        el('div', { style: 'font-weight:700;color:' + profitColor(r.profit) }, (r.profit > 0 ? '+' : '') + money(r.profit)),
+        el('div', { class: 'small muted' }, money(r.marginPct) + '% · รับ ' + money(r.receivedAmount))));
+  }
+
+  function channelChips(cur, onPick) {
+    var opts = [['', 'ทุกช่องทาง']].concat(State.channels.map(function (c) { return [c.channelId, c.name]; }));
+    return el('div', { class: 'tabs' }, opts.map(function (o) {
+      return el('button', { class: 'chip' + (cur === o[0] ? ' on' : ''), onclick: function () { onPick(o[0]); } }, o[1]);
+    }));
+  }
+
+  /** ออเดอร์รอบันทึกยอดเงิน */
+  function viewFinPending(app, st) {
+    st = st || { channelId: '', q: '' };
+    var out = el('div', { style: 'display:flex;flex-direction:column;gap:10px' });
+    var bar = scanBar({
+      title: 'สแกนเลขออเดอร์', placeholder: 'ค้นหา/สแกนเลขออเดอร์',
+      onCode: function (v) { load(v, true); }
+    });
+    page(app, 'รอบันทึกยอดเงิน', [
+      channelChips(st.channelId, function (c) { replaceTop(viewFinPending, { channelId: c, q: '' }); }),
+      bar,
+      el('div', { class: 'hint' }, 'แตะออเดอร์เพื่อกรอก "ราคาที่ลูกค้าจ่าย" และ "เงินที่ได้รับจริง"'),
+      out
+    ]);
+    function load(q, auto) {
+      st.q = q || '';
+      clear(out); append(out, loadingBox());
+      Api.read('finance.pending', { channelId: st.channelId, q: st.q }).then(function (d) {
+        clear(out);
+        if (auto && d.items.length === 1) { beep(true); go(viewFinPayment, { internalOrderId: d.items[0].internalOrderId }); return; }
+        if (st.q) append(out, el('div', { class: 'row' }, el('div', { class: 'grow small muted' }, 'ผลค้นหา "' + st.q + '" — ' + fmt(d.total) + ' ออเดอร์'),
+          el('button', { class: 'chip', onclick: function () { load(''); } }, 'ล้างค้นหา')));
+        if (!d.items.length) {
+          append(out, el('div', { class: 'card empty' }, st.q ? 'ไม่พบออเดอร์นี้ในรายการรอบันทึก (อาจบันทึกยอดเงินไปแล้ว ดูได้ที่ "กำไรต่อออเดอร์")' : 'ไม่มีออเดอร์รอบันทึกยอดเงิน'));
+          return;
+        }
+        if (!st.q) append(out, el('div', { class: 'small muted' }, 'ทั้งหมด ' + fmt(d.total) + ' ออเดอร์ (ล่าสุดอยู่บนสุด)'));
+        append(out, d.items.map(function (o) {
+          return el('button', { class: 'list-btn', onclick: function () { go(viewFinPayment, { internalOrderId: o.internalOrderId }); } },
+            el('div', { class: 'grow' },
+              el('div', { class: 'mono', style: 'font-weight:600;word-break:break-all' }, o.orderNo),
+              el('div', { class: 'small muted' }, o.channelName + ' · ' + fmt(o.totalQty) + ' ชิ้น · ส่ง ' + String(o.createdAt).substring(0, 16))),
+            el('span', { class: 'badge ' + (o.days > 14 ? 'c-red' : o.days > 7 ? 'c-amber' : 'c-gray') }, o.days === 0 ? 'วันนี้' : o.days + ' วัน'));
+        }));
+        if (d.truncated) append(out, el('div', { class: 'hint' }, 'แสดง ' + d.items.length + ' ออเดอร์ล่าสุด — ค้นหาด้วยเลขออเดอร์เพื่อหาออเดอร์เก่า'));
+      }).catch(function (e) { clear(out); append(out, errorBox(e)); });
+    }
+    load(st.q);
+  }
+
+  /** กรอกยอดเงินของ 1 ออเดอร์ (ใช้ทั้งบันทึกใหม่และแก้ไข) */
+  function viewFinPayment(app, st) {
+    var holder = el('div', { style: 'display:flex;flex-direction:column;gap:12px' });
+    var footerBtn = el('button', { class: 'btn btn-primary btn-lg', style: 'flex:1', disabled: true }, 'บันทึกยอดเงิน');
+    page(app, 'บันทึกยอดเงิน', holder, footerBtn);
+    append(holder, loadingBox());
+    Api.read('finance.order', { internalOrderId: st.internalOrderId }).then(function (d) { build(d); })
+      .catch(function (e) { clear(holder); append(holder, errorBox(e)); });
+
+    function build(d) {
+      clear(holder);
+      var o = d.order, rec = d.record;
+      var cancelled = o.status === 'CANCELLED';
+      append(holder, el('div', { class: 'card' },
+        el('div', { class: 'row' }, el('div', { class: 'grow' }, el('div', { class: 'small muted' }, o.channelName),
+          el('div', { class: 'mono', style: 'font-weight:700;font-size:19px;word-break:break-all' }, o.orderNo)),
+          el('span', { class: 'badge ' + (rec ? 'c-green' : 'c-amber') }, rec ? 'บันทึกแล้ว' : 'รอบันทึก')),
+        el('div', { class: 'small muted', style: 'margin-top:6px' }, 'ส่งเมื่อ ' + o.completedAt + ' · ' + fmt(o.totalQty) + ' ชิ้น · ' + (ORDER_STATUS_LABEL[o.status] || o.status))));
+      if (cancelled) {
+        append(holder, el('div', { class: 'banner error' }, icon('alert'), el('div', null, 'ออเดอร์นี้ถูกยกเลิกแล้ว ไม่ต้องบันทึกยอดเงิน')));
+        if (rec) append(holder, el('div', { class: 'card' }, el('h3', null, 'ยอดเงินที่เคยบันทึก'), finRecordRow(rec)));
+        return;
+      }
+      // ---- ต้นทุนสินค้า ----
+      var costInputs = {};
+      var costCard = el('div', { class: 'card' }, el('h3', null, 'ต้นทุนสินค้า'));
+      d.lines.forEach(function (l) {
+        var right;
+        if (l.unitCost == null) {
+          var ci = moneyInput('', 'ทุน/' + l.unit);
+          ci.style.width = '120px'; ci.style.textAlign = 'right';
+          ci.addEventListener('input', recalc);
+          costInputs[l.sku] = ci;
+          right = el('div', { class: 'right' }, ci, el('div', { class: 'small', style: 'color:var(--danger);margin-top:4px' }, 'ยังไม่มีต้นทุน'));
+        } else {
+          right = el('div', { class: 'right' }, el('div', { style: 'font-weight:600' }, money(l.lineCost)),
+            el('div', { class: 'small muted' }, money(l.unitCost) + ' × ' + fmt(l.qty)));
+        }
+        append(costCard, el('div', { class: 'row fin-line' },
+          el('div', { class: 'grow' }, el('div', { style: 'font-weight:600' }, l.name),
+            el('div', { class: 'small muted mono' }, l.sku),
+            el('div', { class: 'small muted' }, 'คิดต้นทุน ' + fmt(l.qty) + ' ' + l.unit + (l.qtyReturned ? ' (ขาย ' + fmt(l.qtySold) + ' คืน ' + fmt(l.qtyReturned) + ')' : ''))),
+          right));
+      });
+      if (Object.keys(costInputs).length) append(costCard, el('div', { class: 'hint' }, 'ต้นทุนที่กรอกตรงนี้จะถูกจำไว้ใช้กับออเดอร์ต่อไปด้วย'));
+      else append(costCard, el('div', { class: 'hint' }, 'แก้ต้นทุนได้ที่ การเงิน → ต้นทุนสินค้า'));
+
+      // ---- ยอดเงิน ----
+      var sale = moneyInput(rec ? rec.salePrice : '', 'เช่น 500');
+      var recv = moneyInput(rec ? rec.receivedAmount : '', 'เช่น 420');
+      var date = el('input', { class: 'input', type: 'date', value: rec ? rec.receivedDate : todayStr(0), max: todayStr(0) });
+      var note = el('input', { class: 'input', maxLength: 300, value: rec ? rec.note : '', placeholder: 'เช่น รอบโอน 15/10' });
+      [sale, recv].forEach(function (i) { i.addEventListener('input', recalc); });
+      append(holder, el('div', { class: 'card', style: 'display:flex;flex-direction:column;gap:12px' },
+        el('div', { class: 'field' }, el('label', null, 'ราคาที่ลูกค้าจ่าย (บาท)'), sale),
+        el('div', { class: 'field' }, el('label', null, 'เงินที่ได้รับจริง (บาท)'), recv,
+          el('div', { class: 'hint' }, 'ยอดที่แพลตฟอร์มโอนเข้าบัญชี หลังหักค่าธรรมเนียมแล้ว')),
+        el('div', { class: 'row' }, el('div', { class: 'field grow' }, el('label', null, 'วันที่ได้รับเงิน'), date)),
+        el('div', { class: 'field' }, el('label', null, 'หมายเหตุ (ถ้ามี)'), note)));
+      append(holder, costCard);
+
+      // ---- ผลกำไร (คำนวณสด) ----
+      var calcBox = el('div', { class: 'card fin-calc' });
+      append(holder, calcBox);
+      if (rec) append(holder, el('div', { class: 'small muted', style: 'text-align:center' }, 'บันทึกล่าสุด ' + rec.updatedAt + ' โดย ' + rec.updatedBy));
+
+      function current() {
+        var s = parseMoney(sale.value), r = parseMoney(recv.value);
+        var cost = 0, missing = [], newCosts = {}, bad = false;
+        d.lines.forEach(function (l) {
+          if (l.unitCost != null) { cost += l.lineCost; return; }
+          if (!l.qty) return;
+          var raw = costInputs[l.sku].value.trim();
+          var c = parseMoney(raw);
+          if (raw && c == null) bad = true;
+          if (c == null) { missing.push(l.sku); return; }
+          newCosts[l.sku] = c;
+          cost += Math.round(c * l.qty * 100) / 100;
+        });
+        cost = Math.round(cost * 100) / 100;
+        return { s: s, r: r, cost: cost, missing: missing, newCosts: newCosts, bad: bad,
+          badSale: sale.value.trim() !== '' && s == null, badRecv: recv.value.trim() !== '' && r == null };
+      }
+      function recalc() {
+        var c = current();
+        clear(calcBox);
+        var rows = [['ราคาที่ลูกค้าจ่าย', c.s == null ? '—' : money(c.s)],
+          ['ค่าธรรมเนียม/ส่วนลดที่ถูกหัก', c.s == null || c.r == null ? '—' : '−' + money(c.s - c.r)],
+          ['เงินที่ได้รับจริง', c.r == null ? '—' : money(c.r)],
+          ['ต้นทุนสินค้า', c.missing.length ? 'ยังขาด ' + c.missing.length + ' รายการ' : '−' + money(c.cost)]];
+        append(calcBox, el('dl', { class: 'kv' }, rows.map(function (r) { return [el('dt', null, r[0]), el('dd', null, r[1])]; })));
+        var ready = c.s != null && c.r != null && !c.missing.length && !c.bad;
+        if (ready) {
+          var profit = Math.round((c.r - c.cost) * 100) / 100;
+          var pct = c.s > 0 ? Math.round(profit / c.s * 10000) / 100 : 0;
+          append(calcBox, el('div', { class: 'fin-profit', style: 'color:' + profitColor(profit) },
+            el('div', { class: 'small' }, profit < 0 ? 'ขาดทุนต่อออเดอร์' : 'กำไรต่อออเดอร์'),
+            el('div', { class: 'v' }, (profit > 0 ? '+' : '') + money(profit) + ' บาท'),
+            el('div', null, money(pct) + '% ของราคาขาย')));
+          if (c.r > c.s) append(calcBox, el('div', { class: 'banner warn' }, icon('alert'), el('div', null, 'เงินที่ได้รับมากกว่าราคาที่ลูกค้าจ่าย — ตรวจตัวเลขอีกครั้ง')));
+        } else {
+          var why = c.badSale || c.badRecv || c.bad ? 'ตัวเลขไม่ถูกต้อง (ใส่ได้ทศนิยมไม่เกิน 2 ตำแหน่ง)' :
+            c.missing.length ? 'กรอกต้นทุนสินค้าให้ครบเพื่อดูกำไร' : 'กรอกราคาที่ลูกค้าจ่ายและเงินที่ได้รับ';
+          append(calcBox, el('div', { class: 'hint', style: 'text-align:center;margin-top:8px' }, why));
+        }
+        footerBtn.disabled = !ready;
+        footerBtn.textContent = rec ? 'บันทึกการแก้ไข' : 'บันทึกยอดเงิน';
+        return c;
+      }
+      recalc();
+      setTimeout(function () { (rec ? recv : sale).focus(); }, 120);
+
+      footerBtn.addEventListener('click', function () {
+        var c = recalc();
+        if (footerBtn.disabled) return;
+        if (!date.value || date.value > todayStr(0)) { showError({ message: 'วันที่ได้รับเงินต้องไม่เป็นวันในอนาคต' }); return; }
+        var profit = Math.round((c.r - c.cost) * 100) / 100;
+        var rows = [['ออเดอร์', o.orderNo], ['ราคาที่ลูกค้าจ่าย', money(c.s)], ['เงินที่ได้รับจริง', money(c.r)], ['ต้นทุนสินค้า', money(c.cost)],
+          [profit < 0 ? 'ขาดทุน' : 'กำไร', money(profit) + ' บาท'], ['วันที่ได้รับเงิน', date.value]];
+        Object.keys(c.newCosts).forEach(function (k) { rows.push(['ต้นทุนใหม่ ' + k, money(c.newCosts[k]) + ' / ชิ้น']); });
+        confirmSheet({ title: rec ? 'ยืนยันแก้ไขยอดเงิน' : 'ยืนยันบันทึกยอดเงิน', confirmText: 'ยืนยันบันทึก', rows: rows, lines: [] }).then(function (ok) {
+          if (!ok) return;
+          submitWrite('finance.payment.save', {
+            internalOrderId: o.internalOrderId, salePrice: c.s, receivedAmount: c.r, receivedDate: date.value,
+            note: note.value.trim(), newCosts: c.newCosts
+          }, 'ยอดเงินออเดอร์ ' + o.orderNo).then(function (res) {
+            if (!res) return;
+            replaceTop(finResultView, res);
+          }).catch(function (e) {
+            if (e.code === 'COST_MISSING') { showError(e).then(function () { replaceTop(viewFinPayment, st); }); return; }
+            showError(e);
+          });
+        });
+      });
+    }
+  }
+
+  function finResultView(app, d) {
+    beep(true);
+    var r = d.record;
+    page(app, 'บันทึกยอดเงิน', [
+      el('div', { class: 'card result' },
+        el('div', { class: 'big' }, icon('check')),
+        el('h2', null, d.message),
+        el('div', { class: 'muted', style: 'margin-top:6px' }, r.channelName + ' · เลขออเดอร์'),
+        el('div', { class: 'doc' }, r.orderNo)),
+      el('div', { class: 'card fin-calc' },
+        el('dl', { class: 'kv' },
+          el('dt', null, 'ราคาที่ลูกค้าจ่าย'), el('dd', null, money(r.salePrice)),
+          el('dt', null, 'ค่าธรรมเนียม/ส่วนลด'), el('dd', null, '−' + money(r.feeAmount)),
+          el('dt', null, 'เงินที่ได้รับจริง'), el('dd', null, money(r.receivedAmount)),
+          el('dt', null, 'ต้นทุนสินค้า'), el('dd', null, '−' + money(r.costAmount))),
+        el('div', { class: 'fin-profit', style: 'color:' + profitColor(r.profit) },
+          el('div', { class: 'small' }, r.profit < 0 ? 'ขาดทุนต่อออเดอร์' : 'กำไรต่อออเดอร์'),
+          el('div', { class: 'v' }, (r.profit > 0 ? '+' : '') + money(r.profit) + ' บาท'),
+          el('div', null, money(r.marginPct) + '% ของราคาขาย')))
+    ], [
+      el('button', { class: 'btn btn-outline', style: 'flex:1', onclick: function () { stack = stack.slice(0, 2); render(); } }, 'เมนูการเงิน'),
+      el('button', { class: 'btn btn-primary', style: 'flex:2', onclick: function () { stack = stack.slice(0, 2); go(viewFinPending); } }, 'ออเดอร์ถัดไป')
+    ]);
+  }
+
+  /** กำไรต่อออเดอร์ (รายการที่บันทึกแล้ว) */
+  function viewFinRecords(app, st) {
+    st = st || { channelId: '', q: '', onlyLoss: false, from: '', to: '' };
+    var out = el('div', { style: 'display:flex;flex-direction:column;gap:10px' });
+    var q = el('input', { class: 'input mono', placeholder: 'ค้นหาเลขออเดอร์', value: st.q, autocapitalize: 'characters', enterkeyhint: 'search' });
+    var from = el('input', { class: 'input', type: 'date', value: st.from });
+    var to = el('input', { class: 'input', type: 'date', value: st.to });
+    q.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); apply(); } });
+    function apply() { replaceTop(viewFinRecords, { channelId: st.channelId, q: q.value.trim(), onlyLoss: st.onlyLoss, from: from.value, to: to.value }); }
+    page(app, 'กำไรต่อออเดอร์', [
+      channelChips(st.channelId, function (c) { st.channelId = c; apply(); }),
+      el('div', { class: 'card', style: 'display:flex;flex-direction:column;gap:10px' },
+        q,
+        el('div', { class: 'row' }, el('div', { class: 'field grow' }, el('label', null, 'รับเงินตั้งแต่'), from), el('div', { class: 'field grow' }, el('label', null, 'ถึง'), to)),
+        el('div', { class: 'row' },
+          el('button', { class: 'chip' + (st.onlyLoss ? ' on' : ''), onclick: function () { st.onlyLoss = !st.onlyLoss; apply(); } }, 'เฉพาะออเดอร์ขาดทุน'),
+          el('div', { class: 'grow' }),
+          el('button', { class: 'btn btn-primary', style: 'min-height:44px', onclick: apply }, icon('search'), 'ค้นหา'))),
+      out
+    ]);
+    append(out, loadingBox());
+    Api.read('finance.records', { channelId: st.channelId, q: st.q, onlyLoss: st.onlyLoss, dateFrom: st.from, dateTo: st.to }).then(function (d) {
+      clear(out);
+      append(out, el('div', { class: 'small muted' }, 'พบ ' + fmt(d.total) + ' ออเดอร์ · แตะเพื่อดูหรือแก้ไข'));
+      append(out, el('div', { class: 'card' }, d.items.length ? d.items.map(finRecordRow) : el('div', { class: 'empty' }, 'ไม่พบรายการ')));
+      if (d.truncated) append(out, el('div', { class: 'hint' }, 'แสดง ' + d.items.length + ' รายการล่าสุด — ใช้ตัวกรองเพื่อจำกัดผล'));
+    }).catch(function (e) { clear(out); append(out, errorBox(e)); });
+  }
+
+  /** ต้นทุนสินค้า */
+  function viewFinCosts(app, st) {
+    st = st || {};
+    var out = el('div', { style: 'display:flex;flex-direction:column;gap:10px' });
+    var bar = scanBar({ title: 'สแกนสินค้า', placeholder: 'ค้นหา/สแกน SKU หรือชื่อสินค้า', onCode: function (v) { st.q = v; load(true); } });
+    page(app, 'ต้นทุนสินค้า', [
+      el('div', { class: 'tabs' },
+        el('button', { class: 'chip' + (!st.onlyMissing ? ' on' : ''), onclick: function () { replaceTop(viewFinCosts, { onlyMissing: false }); } }, 'ทั้งหมด'),
+        el('button', { class: 'chip' + (st.onlyMissing ? ' on' : ''), onclick: function () { replaceTop(viewFinCosts, { onlyMissing: true }); } }, 'ยังไม่มีต้นทุน')),
+      bar, out
+    ]);
+    function open(item) { costForm(item).then(function (ok) { if (ok) load(false); }); }
+    function load(auto) {
+      clear(out); append(out, loadingBox());
+      Api.read('finance.costs', { q: st.q || '', onlyMissing: !!st.onlyMissing }).then(function (d) {
+        clear(out);
+        if (auto && d.items.length === 1) open(d.items[0]);
+        if (st.q) append(out, el('div', { class: 'row' }, el('div', { class: 'grow small muted' }, 'ผลค้นหา "' + st.q + '" — ' + fmt(d.total) + ' รายการ'),
+          el('button', { class: 'chip', onclick: function () { st.q = ''; load(false); } }, 'ล้างค้นหา')));
+        if (!d.items.length) { append(out, el('div', { class: 'card empty' }, st.onlyMissing && !st.q ? 'สินค้าทุกตัวมีต้นทุนแล้ว' : 'ไม่พบสินค้า')); return; }
+        append(out, d.items.map(function (it) {
+          return el('button', { class: 'list-btn', onclick: function () { open(it); } },
+            el('div', { class: 'grow' }, el('div', { style: 'font-weight:600' }, it.name), el('div', { class: 'small muted mono' }, it.sku)),
+            it.unitCost == null ? el('span', { class: 'badge c-red' }, 'ยังไม่มีต้นทุน')
+              : el('div', { class: 'right' }, el('div', { style: 'font-weight:700' }, money(it.unitCost)), el('div', { class: 'small muted' }, 'บาท/' + it.unit)));
+        }));
+        if (d.truncated) append(out, el('div', { class: 'hint' }, 'แสดง ' + d.items.length + ' รายการแรก — พิมพ์ค้นหาเพื่อหาสินค้าอื่น'));
+      }).catch(function (e) { clear(out); append(out, errorBox(e)); });
+    }
+    load(false);
   }
 
   /* ================================================================ */

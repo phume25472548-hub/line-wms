@@ -225,3 +225,90 @@ textarea.input { min-height: 80px; resize: vertical; }
 .btn { white-space: nowrap; }
 .input.mono::placeholder { font-family: 'IBM Plex Sans Thai', 'Noto Sans Thai', system-ui, sans-serif; letter-spacing: 0; }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+
+/* ---------- การเงิน (v1.1) ---------- */
+.fin-big { align-items: center; }
+.fin-big > svg { width: 20px; height: 20px; color: var(--ink-3); flex: none; }
+.fin-num { min-width: 56px; font-size: 28px; font-weight: 700; text-align: center; line-height: 1.1; }
+.fin-row { width: 100%; display: flex; gap: 10px; align-items: center; border: 0; background: none; padding: 10px 0; border-bottom: 1px solid var(--line); text-align: left; cursor: pointer; }
+.fin-row:last-child { border-bottom: 0; }
+.fin-row .grow { flex: 1; min-width: 0; }
+.fin-line { padding: 10px 0; border-bottom: 1px solid var(--line); align-items: flex-start; }
+.fin-line:last-of-type { border-bottom: 0; }
+.money-in { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.fin-calc .kv dd { font-variant-numeric: tabular-nums; }
+.fin-profit { text-align: center; margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--line); font-weight: 600; }
+.fin-profit .v { font-size: 30px; font-weight: 700; line-height: 1.25; font-variant-numeric: tabular-nums; }
+.fin-ic { width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; margin: 0 auto; }
+.fin-ic svg { width: 24px; height: 24px; }
+
+/* ================================================================ */
+/* Responsive v1.1 — โทรศัพท์ / iPad / คอมพิวเตอร์                     */
+/* ================================================================ */
+/* มือถือจอเล็กมาก (เช่น iPhone SE รุ่นแรก) */
+@media (max-width: 359px) {
+  .page { padding-left: 12px; padding-right: 12px; }
+  .menu-grid { gap: 10px; }
+  .tile { padding: 14px 10px; min-height: 100px; }
+  .tile .t { font-size: 15px; }
+}
+/* มือถือแนวนอน / แท็บเล็ตเล็ก */
+@media (min-width: 480px) { .kpis { grid-template-columns: repeat(3, 1fr); } }
+
+/* iPad / แท็บเล็ต */
+@media (min-width: 768px) {
+  body { font-size: 17px; }
+  #app { max-width: 960px; }
+  .footer-bar .inner { max-width: 928px; }
+  .topbar { min-height: 64px; padding: 10px 20px; }
+  .topbar h1 { font-size: 21px; }
+  .icon-btn { width: 48px; height: 48px; }
+  .icon-btn svg { width: 26px; height: 26px; }
+  .page { padding: 24px 24px calc(130px + var(--safe-b)); gap: 16px; }
+  .hero { padding: 28px 28px 30px; border-radius: 0 0 28px 28px; }
+  .hero .company { font-size: 15px; }
+  .hero .hello { font-size: 28px; }
+  .avatar { width: 48px; height: 48px; }
+  .menu-grid { grid-template-columns: repeat(4, 1fr); gap: 16px; }
+  .tile { min-height: 150px; padding: 20px 16px; gap: 14px; }
+  .tile .ic { width: 58px; height: 58px; border-radius: 16px; }
+  .tile .ic svg { width: 32px; height: 32px; }
+  .tile .t { font-size: 18px; }
+  .tile .s { font-size: 14px; }
+  .btn { min-height: 54px; }
+  .kpis { grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .kpi .v { font-size: 30px; }
+  .fin-num { min-width: 72px; font-size: 34px; }
+  .fin-ic { width: 54px; height: 54px; }
+  .fin-ic svg { width: 30px; height: 30px; }
+  .fin-big > svg { width: 24px; height: 24px; }
+  /* หน้าต่างย่อยแสดงกลางจอแทนการเลื่อนขึ้นจากด้านล่าง */
+  .backdrop { align-items: center; padding: 24px; }
+  .sheet { max-width: 560px; border-radius: 22px; padding: 24px; max-height: 86vh; }
+  .toast { top: 20px; font-size: 16px; }
+}
+/* หน้าฟอร์ม/รายการบนจอกว้าง: จำกัดความกว้างให้อ่านง่าย (หน้าหลักใช้เต็มความกว้าง) */
+@media (min-width: 900px) {
+  .page:not(.page-home) { width: 100%; max-width: 820px; margin: 0 auto; box-sizing: border-box; }
+  .footer-bar .inner { max-width: 772px; }
+}
+/* คอมพิวเตอร์ / iPad แนวนอน */
+@media (min-width: 1100px) {
+  #app { max-width: 1180px; }
+  .page-home { padding-left: 32px; padding-right: 32px; }
+  .hero { padding: 32px 32px 34px; }
+  .menu-grid { grid-template-columns: repeat(6, 1fr); }
+  .tile { min-height: 160px; }
+}
+/* อุปกรณ์ที่ใช้เมาส์: มีเอฟเฟกต์เมื่อชี้ */
+@media (hover: hover) and (pointer: fine) {
+  .tile, .list-btn, .fin-row, .chip, .choice { transition: box-shadow .15s ease, transform .15s ease, background-color .15s ease; }
+  .tile:hover { transform: translateY(-2px); box-shadow: 0 2px 4px rgba(17,24,39,.08), 0 10px 24px rgba(17,24,39,.10); }
+  .list-btn:hover { box-shadow: 0 2px 4px rgba(17,24,39,.08), 0 8px 20px rgba(17,24,39,.09); }
+  .fin-row:hover { background: var(--bg); }
+  .icon-btn:hover { background: var(--bg); }
+  .btn:hover { filter: brightness(.96); }
+}
+/* ชื่อปุ่มเมนูอยู่แนวเดียวกันทั้งแถว แม้คำอธิบายจะยาว 2 บรรทัด */
+.tile { justify-content: flex-start; }
+.tile .ic { flex: none; margin-bottom: 4px; }

@@ -7,7 +7,7 @@ window.APP_CONFIG = {
   LIFF_ID: '2012121135-ER2PTeHe',
 
   // URL ของ Google Apps Script Web App ที่ลงท้ายด้วย /exec
-  API_URL: 'https://script.google.com/macros/s/AKfycbwsTs_RHZUIDWjCFAkgAA-r_vRFTlnTKHoci0-e6pyqJS-4M7ApQjArUavRFkra2a3J/exec',
+  API_URL: 'https://script.google.com/macros/s/AKfycbzFd5t43e2jGl-0G3H1Sdr7eWJ_YaIqLtHPSrTp4wvFWoz7LSqcsvAtaN_6Axc6i6-A/exec',
 
   // เวลารอคำตอบสูงสุดต่อครั้ง (มิลลิวินาที)
   REQUEST_TIMEOUT_MS: 30000
