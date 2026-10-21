@@ -29,8 +29,8 @@ export async function onRequestGet({ request, env }) {
     if (endpoint.protocol !== 'https:' || endpoint.hostname !== 'script.google.com') throw new Error('Invalid WMS_GAS_URL');
     const response = await fetch(endpoint.toString(), {
       method: 'POST', redirect: 'follow', cache: 'no-store',
-      headers: { 'content-type': 'text/plain;charset=UTF-8', accept: 'application/json', 'x-wms-partner-key': env.WMS_PARTNER_API_KEY },
-      body: JSON.stringify({ action: 'partner.snapshot', payload: { stockLimit: 1000, orderLimit: 100 } })
+      headers: { 'content-type': 'text/plain;charset=UTF-8', accept: 'application/json' },
+      body: JSON.stringify({ action: 'partner.snapshot', partnerKey: env.WMS_PARTNER_API_KEY, payload: { stockLimit: 1000, orderLimit: 100 } })
     });
     if (!response.ok) throw new Error('Upstream request failed');
     const result = await response.json();

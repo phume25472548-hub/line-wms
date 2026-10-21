@@ -7,8 +7,8 @@ The partner view is a separate static page at `/partner.html`. It does not load 
 The repository contains the LINE WMS browser client, but not the Google Apps Script server project. The current browser API uses verified LINE ID tokens and does not include a partner-only read API. The EdgeOne adapter therefore expects the Apps Script deployment to implement a new read-only action before live data can appear:
 
 - `action`: `partner.snapshot`
-- Header: `x-wms-partner-key` (compare against a Script Property; never return or log the value)
-- Body: `{ "action": "partner.snapshot", "payload": { "stockLimit": 1000, "orderLimit": 100 } }`
+- Body: `{ "action": "partner.snapshot", "partnerKey": "<server-side key>", "payload": { "stockLimit": 1000, "orderLimit": 100 } }`
+- Compare `partnerKey` against a Google Apps Script Script Property; never return or log the value. Apps Script web apps expose request body data to `doPost(e)`, so the adapter sends this server-to-server credential in the JSON body rather than relying on custom request headers.
 - Success: `{ "ok": true, "data": { "stocks": [...], "orders": [...], "updatedAt": "..." } }`
 - Each stock row needs `sku`, `name`, optional `category`, `unit`, `available`, `inspection`, and `total`.
 - Each order row needs `orderNo`, `channelName`, `status`, `createdAt`, `quantity`, and `itemCount`.
