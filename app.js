@@ -1,5 +1,5 @@
 /* LINE WMS — LIFF Frontend (Vanilla JS)
- * หน้าจอทั้งหมดของพนักงาน: รับเข้า ขายออก รับคืน ส่งคืน ตัดเสีย เช็กสต๊อก ตรวจนับ ประวัติ Dashboard ตั้งค่า และการเงิน (ADMIN)
+ * หน้าจอทั้งหมดของพนักงาน: รับเข้า ขายหน้าร้าน (บิลเงินสด) ขายออกแพลตฟอร์ม (ใบรายการสินค้า) รับคืน ส่งคืน ตัดเสีย เช็กสต๊อก ตรวจนับ ประวัติ Dashboard ตั้งค่า และการเงิน (ADMIN)
  * หลักความปลอดภัย: หน้าจอส่งเฉพาะ LINE ID Token ไปให้ Server ตรวจ ไม่ส่ง/ไม่เชื่อ User ID เอง
  */
 (function () {
@@ -40,7 +40,10 @@
     home: '<path d="M3 11l9-8 9 8v9a1 1 0 01-1 1h-5v-6H9v6H4a1 1 0 01-1-1z"/>',
     coin: '<circle cx="12" cy="12" r="9"/><path d="M15 9.5c-.4-1-1.6-1.6-3-1.6-1.7 0-3 .9-3 2.1s1.3 1.8 3 2.1 3 .9 3 2.1-1.3 2.1-3 2.1c-1.4 0-2.6-.6-3-1.6M12 6v2m0 8v2"/>',
     box: '<path d="M21 8l-9-5-9 5v8l9 5 9-5z"/><path d="M3 8l9 5 9-5M12 13v8"/>',
-    chev: '<path d="M9 6l6 6-6 6"/>'
+    chev: '<path d="M9 6l6 6-6 6"/>',
+    store: '<path d="M3 9l1.5-5h15L21 9"/><path d="M3 9a3 3 0 006 0 3 3 0 006 0 3 3 0 006 0"/><path d="M5 12v8h14v-8M10 20v-5h4v5"/>',
+    doc: '<path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5M10 13h6M10 17h6"/>',
+    printer: '<path d="M7 9V3h10v6"/><rect x="3" y="9" width="18" height="8" rx="2"/><path d="M7 14h10v7H7z"/>'
   };
   function icon(name) {
     var s = document.createElement('span');
@@ -513,8 +516,10 @@
         category: el('input', { class: 'input', value: p.category || '', placeholder: 'หมวดหมู่ (ไม่บังคับ)' }),
         unit: el('input', { class: 'input', value: p.unit || 'ชิ้น' }),
         min: el('input', { class: 'input', type: 'number', inputmode: 'numeric', value: p.minStock != null ? p.minStock : '', placeholder: 'ค่าเริ่มต้นตามตั้งค่า' }),
-        active: el('input', { type: 'checkbox', checked: p.active !== false, style: 'width:22px;height:22px' })
+        active: el('input', { type: 'checkbox', checked: p.active !== false, style: 'width:22px;height:22px' }),
+        price: moneyInput(p.price == null ? '' : p.price, 'เช่น 1290')
       };
+      var canPrice = !!State.perms.admin;
       var err = el('div', { class: 'err-text' });
       var save = el('button', { class: 'btn btn-primary btn-lg btn-block' }, 'บันทึกสินค้า');
       save.addEventListener('click', function () {
@@ -522,6 +527,11 @@
         if (!f.sku.value.trim() || !f.name.value.trim()) { err.textContent = 'กรุณากรอก SKU และชื่อสินค้า'; return; }
         save.disabled = true;
         var payload = { isNew: !!isNew, sku: f.sku.value.trim(), name: f.name.value.trim(), category: f.category.value.trim(), unit: f.unit.value.trim(), minStock: f.min.value, active: f.active.checked };
+        if (canPrice && f.price.value.trim() !== '') {
+          var pv = parseMoney(f.price.value);
+          if (pv == null) { err.textContent = 'ราคาขายต้องเป็นตัวเลข 0 ขึ้นไป (ทศนิยมไม่เกิน 2 ตำแหน่ง)'; return; }
+          payload.salePrice = pv;
+        }
         submitWrite('product.save', payload, (isNew ? 'สร้างสินค้า ' : 'แก้ไขสินค้า ') + payload.sku).then(function (d) {
           if (!d) { close(null); return; }
           toast(d.message, 'ok');
@@ -534,6 +544,8 @@
         el('div', { class: 'field' }, el('label', null, 'ชื่อสินค้า *'), f.name),
         el('div', { class: 'row' }, el('div', { class: 'field grow' }, el('label', null, 'หมวดหมู่'), f.category), el('div', { class: 'field', style: 'width:120px' }, el('label', null, 'หน่วย'), f.unit)),
         el('div', { class: 'field' }, el('label', null, 'แจ้งเตือนเมื่อพร้อมขายเหลือไม่เกิน'), f.min),
+        canPrice ? el('div', { class: 'field' }, el('label', null, 'ราคาขายหลัก (บาท) — ใช้ในเมนูขายหน้าร้าน'), f.price)
+          : el('div', { class: 'small muted' }, 'ราคาขายหลัก: ' + (p.price == null ? 'ยังไม่ได้ตั้ง' : money(p.price) + ' บาท') + ' (ตั้ง/แก้ได้เฉพาะผู้ดูแลระบบ)'),
         el('label', { class: 'row' }, f.active, el('span', null, 'เปิดใช้งานสินค้านี้')),
         err,
         el('div', { class: 'actions' }, save, el('button', { class: 'btn btn-outline btn-block', onclick: function () { close(null); } }, 'ยกเลิก'))
@@ -581,7 +593,8 @@
           if (!d.items.length) { append(res, el('div', { class: 'empty' }, 'ไม่พบสินค้า')); return; }
           d.items.forEach(function (p) {
             append(res, el('button', { class: 'list-btn', onclick: function () { productCache[p.sku] = p; close(p); } },
-              el('div', { class: 'grow' }, el('div', { style: 'font-weight:600' }, p.name), el('div', { class: 'small muted mono' }, p.sku + (p.active ? '' : ' · ปิดใช้งาน'))),
+              el('div', { class: 'grow' }, el('div', { style: 'font-weight:600' }, p.name), el('div', { class: 'small muted mono' }, p.sku + (p.active ? '' : ' · ปิดใช้งาน')),
+                el('div', { class: 'small muted' }, p.price == null ? 'ยังไม่มีราคาขาย' : money(p.price) + ' บาท')),
               el('div', { class: 'right' }, el('div', { style: 'font-weight:700' }, fmt(p.balance.available)), el('div', { class: 'small muted' }, 'พร้อมขาย'))));
           });
         }).catch(function (e) { clear(res); append(res, el('div', { class: 'err-text' }, e.message)); });
@@ -750,6 +763,7 @@
         el('div', { class: 'n av' }, el('b', null, fmt(p.balance.available)), el('span', null, 'พร้อมขาย')),
         el('div', { class: 'n in' }, el('b', null, fmt(p.balance.inspection)), el('span', null, 'รอตรวจสอบ')),
         el('div', { class: 'n' }, el('b', null, fmt(p.balance.total)), el('span', null, 'รวม (' + p.unit + ')'))),
+      el('div', { class: 'small muted', style: 'margin-top:8px' }, 'ราคาขายหลัก ' + (p.price == null ? '— ยังไม่ได้ตั้ง' : money(p.price) + ' บาท/' + p.unit)),
       p.minStock > 0 && p.balance.available <= p.minStock ? el('div', { class: 'banner warn', style: 'margin-top:10px' }, icon('alert'), el('div', null, 'ใกล้หมด (จุดแจ้งเตือน ' + fmt(p.minStock) + ')')) : null,
       extra || null);
   }
@@ -780,7 +794,8 @@
         el('h2', null, r.data.message || 'บันทึกเรียบร้อย'),
         r.refLabel ? el('div', { class: 'muted', style: 'margin-top:6px' }, r.refLabel) : null,
         r.ref ? el('div', { class: 'doc' }, r.ref) : null,
-        r.sub ? el('div', { class: 'muted small', style: 'margin-top:4px' }, r.sub) : null),
+        r.sub ? el('div', { class: 'muted small', style: 'margin-top:4px' }, r.sub) : null,
+        r.extra ? el('div', { style: 'margin-top:14px' }, r.extra) : null),
       (r.data.lines || []).length ? el('div', { class: 'card' }, el('h3', null, 'ยอดคงเหลือหลังบันทึก'),
         r.data.lines.map(function (l) {
           return el('div', { class: 'row', style: 'padding:8px 0;border-bottom:1px solid var(--line)' },
@@ -802,7 +817,8 @@
     var u = State.user, can = State.perms;
     var tiles = [
       [can.write, 'รับสินค้าเข้า', 'สแกนรับของเข้าคลัง', 'inbox', 'c-green', viewStockIn],
-      [can.write, 'ขายสินค้าออก', 'แพ็กออเดอร์ ตัดสต๊อก', 'cart', 'c-blue', viewSale],
+      [can.write, 'ขายหน้าร้าน', 'ขายตรง ราคาขึ้นเอง ออกบิล', 'store', 'c-green', viewPos],
+      [can.write, 'ขายสินค้าออก', 'ออเดอร์แพลตฟอร์ม แพ็กของ', 'cart', 'c-blue', viewSale],
       [can.write, 'รับคืนสินค้า', 'ลูกค้าคืนของ', 'undo', 'c-violet', viewCustomerReturn],
       [can.write, 'ส่งคืนสินค้า', 'คืนซัพพลายเออร์', 'truck', 'c-amber', viewSupplierReturn],
       [can.write, 'ตัดสินค้าเสีย', 'แตก ชำรุด หาย หมดอายุ', 'trash', 'c-red', viewWriteOff],
@@ -811,6 +827,7 @@
       [true, 'ประวัติรายการ', 'ค้นหาการเคลื่อนไหว', 'clock', 'c-gray', viewHistory],
       [can.write, 'ผลตรวจสอบ', 'ย้ายของรอตรวจ', 'shield', 'c-amber', viewInspect],
       [can.write, 'ยกเลิกออเดอร์', 'คืนสต๊อกออเดอร์', 'xc', 'c-red', viewCancel],
+      [true, 'บิลและเอกสาร', 'ยอดขายวันนี้ พิมพ์ซ้ำ', 'doc', 'c-violet', viewDocs],
       [true, 'Dashboard', 'สรุปภาพรวม', 'chart', 'c-blue', viewDashboard],
       [can.admin, 'การเงิน', 'ต้นทุน ยอดเงิน กำไร', 'coin', 'c-green', viewFinance],
       [can.admin, 'ตั้งค่าระบบ', 'ช่องทาง พนักงาน สินค้า', 'gear', 'c-gray', viewAdmin]
@@ -931,10 +948,10 @@
   /* ================================================================ */
   /* 3.2 ขายสินค้าออก — แยกตามออเดอร์                                    */
   /* ================================================================ */
-  function channelPicker(onPick, selected) {
-    return el('div', { class: 'choice-grid' }, State.channels.map(function (c) {
+  function channelPicker(onPick, selected, chans) {
+    return el('div', { class: 'choice-grid' }, (chans || State.channels).map(function (c) {
       return el('button', { class: 'choice' + (selected === c.channelId ? ' on' : ''), onclick: function () { onPick(c); } },
-        c.name, el('small', null, c.mode === 'AUTO' ? 'ระบบออกเลขออเดอร์ให้' : 'สแกนเลขออเดอร์จริง'));
+        c.name, el('small', null, c.mode === 'AUTO' ? 'ขายตรง · เลขบิลจากระบบ' : 'แพลตฟอร์ม · สแกนเลขออเดอร์จริง'));
     }));
   }
 
@@ -953,10 +970,12 @@
     st = st || { step: 1 };
     var pg = page(app, 'ขายสินค้าออก', [stepsBar(st.step, 3)]);
     if (st.step === 1) {
-      append(pg, [el('div', { class: 'label' }, 'ขั้นที่ 1 — เลือกช่องทางขาย'), channelPicker(function (c) {
-        replaceTop(viewSale, c.mode === 'AUTO' ? { step: 3, channel: c, orderNo: null } : { step: 2, channel: c });
-      }, st.channel && st.channel.channelId)]);
-      if (!State.channels.length) append(pg, el('div', { class: 'banner warn' }, icon('alert'), el('div', null, 'ยังไม่มีช่องทางขายที่เปิดใช้งาน กรุณาแจ้งผู้ดูแลระบบ')));
+      var plats = platformChannels();
+      append(pg, [el('div', { class: 'label' }, 'ขั้นที่ 1 — เลือกแพลตฟอร์ม'), channelPicker(function (c) {
+        replaceTop(viewSale, { step: 2, channel: c });
+      }, st.channel && st.channel.channelId, plats),
+      el('div', { class: 'hint' }, 'ขายตรง (หน้าร้าน, LINE, Facebook) ใช้เมนู "ขายหน้าร้าน" ซึ่งมีราคาและบิลเงินสด')]);
+      if (!plats.length) append(pg, el('div', { class: 'banner warn' }, icon('alert'), el('div', null, 'ยังไม่มีช่องทางแพลตฟอร์มที่เปิดใช้งาน กรุณาแจ้งผู้ดูแลระบบ')));
       return;
     }
     if (st.step === 2) {
@@ -1011,8 +1030,11 @@
         var payload = { channelId: st.channel.channelId, orderNo: st.orderNo, lines: cart.lines(), note: note.input.value.trim() };
         submitWrite('order.create', payload, 'ขายออเดอร์ ' + (st.orderNo || st.channel.name)).then(function (d) {
           if (!d) return;
+          var packOrder = { channelId: d.channelId, channelName: d.channelName, orderNo: d.orderNo, status: 'COMPLETED', completedAt: d.createdAt, createdBy: d.createdBy,
+            items: (d.lines || []).map(function (l) { return { sku: l.sku, name: l.name, unit: l.unit, qty: l.qty }; }) };
           replaceTop(resultView, {
             title: 'ขายสินค้าออก', data: d, refLabel: 'เลขออเดอร์ (' + d.channelName + ')', ref: d.orderNo, sub: 'รหัสภายใน ' + d.internalOrderId, sign: '−',
+            extra: el('button', { class: 'btn btn-outline btn-block', onclick: function () { printPacking(packOrder, false); } }, icon('printer'), 'พิมพ์ใบรายการสินค้า (' + paperSize() + ')'),
             againText: 'ออเดอร์ถัดไป (' + st.channel.name + ')',
             again: function () { replaceTop(viewSale, st.channel.mode === 'AUTO' ? { step: 3, channel: st.channel, orderNo: null } : { step: 2, channel: st.channel }); }
           });
@@ -1547,8 +1569,9 @@
       else append(costCard, el('div', { class: 'hint' }, 'แก้ต้นทุนได้ที่ การเงิน → ต้นทุนสินค้า'));
 
       // ---- ยอดเงิน ----
-      var sale = moneyInput(rec ? rec.salePrice : '', 'เช่น 500');
-      var recv = moneyInput(rec ? rec.receivedAmount : '', 'เช่น 420');
+      var sale = moneyInput(rec ? rec.salePrice : (d.bill ? d.bill.total : ''), 'เช่น 500');
+      var recv = moneyInput(rec ? rec.receivedAmount : (d.bill ? d.bill.total : ''), 'เช่น 420');
+      if (d.bill && !rec) append(holder, el('div', { class: 'banner info' }, icon('alert'), el('div', null, 'ขายตรง บิล ' + d.bill.billNo + ' ยอด ' + money(d.bill.total) + ' บาท (' + (d.bill.paymentMethod === 'CASH' ? 'เงินสด' : 'โอนเงิน') + ') — ใส่ยอดให้แล้ว เหลือกรอกต้นทุนสินค้า')));
       var date = el('input', { class: 'input', type: 'date', value: rec ? rec.receivedDate : todayStr(0), max: todayStr(0) });
       var note = el('input', { class: 'input', maxLength: 300, value: rec ? rec.note : '', placeholder: 'เช่น รอบโอน 15/10' });
       [sale, recv].forEach(function (i) { i.addEventListener('input', recalc); });
@@ -1723,6 +1746,577 @@
   }
 
   /* ================================================================ */
+  /* ขายหน้าร้าน / ขายตรง (v1.2) — สแกนสินค้า ราคาขึ้นเอง แก้ราคา ลดท้ายบิล  */
+  /* ================================================================ */
+  function r2(n) { return Math.round(Number(n || 0) * 100) / 100; }
+  function directChannels() { return State.channels.filter(function (c) { return c.kind === 'DIRECT' || (!c.kind && c.mode === 'AUTO'); }); }
+  function platformChannels() { return State.channels.filter(function (c) { return c.kind === 'PLATFORM' || (!c.kind && c.mode !== 'AUTO'); }); }
+  var POS_CH_KEY = 'wms_pos_channel';
+
+  function viewPos(app, st) {
+    st = st || {};
+    var chans = directChannels();
+    if (!chans.length) {
+      page(app, 'ขายหน้าร้าน', el('div', { class: 'banner warn' }, icon('alert'), el('div', null, 'ยังไม่มีช่องทางขายตรงที่เปิดใช้งาน (เช่น หน้าร้าน, LINE) กรุณาแจ้งผู้ดูแลระบบให้เพิ่มในเมนู ตั้งค่าระบบ → ช่องทางขาย')));
+      return;
+    }
+    var saved = null; try { saved = localStorage.getItem(POS_CH_KEY); } catch (e) { /* */ }
+    var channel = chans.filter(function (c) { return c.channelId === (st.channelId || saved); })[0] ||
+      chans.filter(function (c) { return c.channelId === 'POS'; })[0] || chans[0];
+    var lines = [];          // { product, qty, price (string ที่พิมพ์) }
+    var payment = 'CASH';
+    var queue = Promise.resolve();
+
+    var listEl = el('div', { class: 'lines' });
+    var discIn = moneyInput('', '0.00'); discIn.classList.add('pos-small-money');
+    var cashIn = moneyInput('', 'ยอดพอดี'); cashIn.classList.add('pos-small-money');
+    var subEl = el('dd'), discShow = el('dd'), totalEl = el('div', { class: 'pos-total-v' }), changeEl = el('div', { class: 'pos-change' });
+    var cashChips = el('div', { class: 'chips' });
+    var cashBox = el('div', { class: 'field' }, el('label', null, 'รับเงินมา (ถ้าต้องการคิดเงินทอน)'), cashIn, cashChips, changeEl);
+    var custName = el('input', { class: 'input', maxLength: 80, placeholder: 'ชื่อลูกค้า (ไม่บังคับ)' });
+    var custPhone = el('input', { class: 'input', maxLength: 20, inputmode: 'tel', placeholder: 'เบอร์โทร (ไม่บังคับ)' });
+    var note = el('input', { class: 'input', maxLength: 300, placeholder: 'หมายเหตุ (ไม่บังคับ)' });
+    var footerBtn = el('button', { class: 'btn btn-primary btn-lg', style: 'flex:1' });
+
+    function find(sku) { for (var i = 0; i < lines.length; i++) if (lines[i].product.sku === sku) return lines[i]; return null; }
+    function priceOf(l) { return parseMoney(l.price); }
+
+    function calc() {
+      var subtotal = 0, bad = [], missing = [], over = [];
+      lines.forEach(function (l) {
+        var p = priceOf(l);
+        if (String(l.price).trim() === '') missing.push(l);
+        else if (p == null) bad.push(l);
+        else subtotal += r2(p * l.qty);
+        if (l.qty > l.product.balance.available) over.push(l);
+      });
+      subtotal = r2(subtotal);
+      var discRaw = discIn.value.trim();
+      var disc = discRaw === '' ? 0 : parseMoney(discRaw);
+      var total = disc == null ? null : r2(subtotal - disc);
+      var cashRaw = cashIn.value.trim();
+      var cash = cashRaw === '' ? null : parseMoney(cashRaw);
+      return { subtotal: subtotal, disc: disc, total: total, bad: bad, missing: missing, over: over, cash: cash, cashBad: cashRaw !== '' && cash == null };
+    }
+
+    function addProduct(p, qty) {
+      if (!p.active) { beep(false); toast('สินค้า ' + p.sku + ' ถูกปิดใช้งาน', 'error'); return; }
+      var l = find(p.sku);
+      if (l) l.qty += qty;
+      else { l = { product: p, qty: qty, price: p.price == null ? '' : String(p.price) }; lines.push(l); }
+      beep(true);
+      renderLines(p.sku);
+      if (Scanner.isOpen()) Scanner.status('+' + qty + '  ' + p.name + (p.price != null ? '  ' + money(p.price) : '  (ยังไม่มีราคา)'), true);
+      if (p.price == null && !Scanner.isOpen()) toast('สินค้านี้ยังไม่มีราคาขายหลัก กรุณาใส่ราคา', 'error');
+    }
+    function handleCode(code) {
+      queue = queue.then(function () {
+        return lookupProduct(code).then(function (p) {
+          if (p.notFound) {
+            if (Scanner.isOpen()) { Scanner.status('ไม่พบสินค้า ' + p.sku, false); beep(false); return; }
+            return notFoundSheet(p.sku).then(function (np) { if (np) addProduct(np, 1); });
+          }
+          addProduct(p, 1);
+        }).catch(function (e) { if (Scanner.isOpen()) Scanner.status(e.message, false); else showError(e); });
+      });
+      return queue;
+    }
+
+    function renderLines(flashSku) {
+      clear(listEl);
+      if (!lines.length) {
+        append(listEl, el('div', { class: 'empty' }, icon('scan'), el('div', null, 'สแกนบาร์โค้ดสินค้า หรือกดค้นหาจากชื่อ — ราคาขึ้นให้อัตโนมัติ')));
+        update(); return;
+      }
+      lines.forEach(function (l, idx) {
+        var p = l.product;
+        var qtyIn = el('input', { type: 'number', inputmode: 'numeric', value: l.qty, min: 1, 'aria-label': 'จำนวน ' + p.name });
+        qtyIn.addEventListener('change', function () { var v = Math.floor(Number(qtyIn.value)); l.qty = v > 0 ? v : 1; renderLines(); });
+        var priceIn = moneyInput(l.price, p.price == null ? 'ใส่ราคา' : money(p.price));
+        priceIn.classList.add('pos-price-in');
+        priceIn.setAttribute('aria-label', 'ราคาต่อ' + p.unit + ' ' + p.name);
+        var lineTotal = el('div', { class: 'pos-line-total' });
+        var priceNote = el('div', { class: 'small' });
+        function paintLine() {
+          var v = priceOf(l);
+          lineTotal.textContent = v == null ? '—' : money(r2(v * l.qty));
+          clear(priceNote);
+          if (p.price == null) { priceNote.style.color = 'var(--danger)'; priceNote.textContent = 'ยังไม่มีราคาขายหลัก — ใส่ราคาที่ขาย'; }
+          else if (String(l.price).trim() !== '' && v == null) { priceNote.style.color = 'var(--danger)'; priceNote.textContent = 'ราคาไม่ถูกต้อง'; }
+          else if (v != null && v !== p.price) {
+            priceNote.style.color = 'var(--warn)';
+            append(priceNote, ['ราคาปกติ ' + money(p.price) + ' ', el('button', { class: 'link-btn', onclick: function () { l.price = String(p.price); priceIn.value = l.price; paintLine(); update(); } }, 'ใช้ราคาปกติ')]);
+          } else { priceNote.style.color = ''; priceNote.className = 'small muted'; priceNote.textContent = 'ราคาขายหลัก'; return; }
+          priceNote.className = 'small';
+        }
+        priceIn.addEventListener('input', function () { l.price = priceIn.value; paintLine(); update(); });
+        var over = l.qty > p.balance.available;
+        var node = el('div', { class: 'line pos-line' + (flashSku === p.sku ? ' flash' : '') },
+          el('div', { class: 'top' },
+            el('div', { class: 'grow' }, el('div', { class: 'name' }, p.name), el('div', { class: 'sku' }, p.sku),
+              el('div', { class: 'meta' }, 'พร้อมขาย ' + fmt(p.balance.available) + ' ' + p.unit), over ? el('div', { class: 'warn' }, 'เกินยอดคงเหลือ ' + fmt(l.qty - p.balance.available) + ' ' + p.unit) : null),
+            el('button', { class: 'icon-btn del-btn', 'aria-label': 'ลบ ' + p.name, onclick: function () { lines.splice(idx, 1); renderLines(); } }, icon('trash'))),
+          el('div', { class: 'pos-line-row' },
+            el('div', { class: 'stepper' },
+              el('button', { 'aria-label': 'ลด', onclick: function () { if (l.qty > 1) { l.qty--; renderLines(); } } }, '−'), qtyIn,
+              el('button', { 'aria-label': 'เพิ่ม', onclick: function () { l.qty++; renderLines(); } }, '+')),
+            el('div', { class: 'pos-x' }, '×'),
+            el('div', { class: 'grow' }, priceIn, priceNote),
+            lineTotal));
+        paintLine();
+        listEl.appendChild(node);
+      });
+      update();
+    }
+
+    function update() {
+      var c = calc();
+      subEl.textContent = money(c.subtotal);
+      discShow.textContent = c.disc == null ? 'ไม่ถูกต้อง' : (c.disc ? '−' + money(c.disc) : '0.00');
+      totalEl.textContent = c.total == null ? '—' : money(c.total);
+      clear(cashChips); clear(changeEl);
+      if (payment === 'CASH' && c.total != null && c.total > 0) {
+        var opts = [c.total];
+        [100, 500, 1000].forEach(function (step) { var v = Math.ceil(c.total / step) * step; if (v > c.total) opts.push(v); });
+        opts.filter(function (v, i, a) { return a.indexOf(v) === i; }).forEach(function (v, i) {
+          append(cashChips, el('button', { class: 'chip', onclick: function () { cashIn.value = String(v); update(); } }, i === 0 ? 'พอดี ' + money(v) : money(v)));
+        });
+        if (c.cashBad) append(changeEl, el('span', { style: 'color:var(--danger)' }, 'จำนวนเงินไม่ถูกต้อง'));
+        else if (c.cash != null && c.cash < c.total) append(changeEl, el('span', { style: 'color:var(--danger)' }, 'รับเงินมาไม่พอ ขาดอีก ' + money(r2(c.total - c.cash))));
+        else if (c.cash != null) append(changeEl, ['เงินทอน ', el('b', null, money(r2(c.cash - c.total)) + ' บาท')]);
+      }
+      var problem = !lines.length ? 'สแกนสินค้าก่อน' :
+        c.missing.length ? 'ใส่ราคาให้ครบ (' + c.missing.length + ' รายการ)' :
+        c.bad.length ? 'แก้ราคาที่ไม่ถูกต้อง' :
+        c.disc == null ? 'แก้ส่วนลดให้ถูกต้อง' :
+        c.total < 0 ? 'ส่วนลดมากกว่ายอดรวม' :
+        (payment === 'CASH' && (c.cashBad || (c.cash != null && c.cash < c.total))) ? 'ตรวจเงินที่รับมา' : null;
+      footerBtn.disabled = !!problem;
+      footerBtn.textContent = problem || ('ยืนยันขาย ' + money(c.total) + ' บาท');
+      return c;
+    }
+
+    var payPick = choiceGroup([['CASH', 'เงินสด'], ['TRANSFER', 'โอนเงิน']], payment, function (v) {
+      payment = v; cashBox.classList.toggle('hidden', v !== 'CASH'); update();
+    });
+    [discIn, cashIn].forEach(function (i) { i.addEventListener('input', update); });
+
+    var bar = scanBar({
+      title: 'สแกนสินค้า (ทีละชิ้น)', continuous: function () { return true; }, onCode: handleCode,
+      search: function () { productPicker().then(function (p) { if (p) addProduct(p, 1); }); }
+    });
+    var chChips = chans.length > 1 ? el('div', { class: 'tabs' }, chans.map(function (c) {
+      return el('button', { class: 'chip' + (c.channelId === channel.channelId ? ' on' : ''), onclick: function () {
+        channel = c; try { localStorage.setItem(POS_CH_KEY, c.channelId); } catch (e) { /* */ }
+        Array.prototype.forEach.call(chChips.children, function (b) { b.classList.toggle('on', b === this); }, this);
+      } }, c.name);
+    })) : el('div', { class: 'small muted' }, 'ช่องทาง: ' + channel.name);
+
+    page(app, 'ขายหน้าร้าน', [
+      chChips, bar, listEl,
+      el('div', { class: 'card pos-sum' },
+        el('dl', { class: 'kv' }, el('dt', null, 'รวมเป็นเงิน'), subEl),
+        el('div', { class: 'row', style: 'margin-top:8px' }, el('div', { class: 'grow label' }, 'ส่วนลดท้ายบิล (บาท)'), discIn),
+        el('dl', { class: 'kv', style: 'margin-top:8px' }, el('dt', null, 'ส่วนลด'), discShow),
+        el('div', { class: 'pos-total' }, el('span', null, 'ยอดสุทธิ'), totalEl)),
+      el('div', { class: 'card', style: 'display:flex;flex-direction:column;gap:12px' },
+        el('div', { class: 'field' }, el('div', { class: 'label' }, 'วิธีรับเงิน'), payPick), cashBox),
+      el('details', { class: 'card pos-more' }, el('summary', null, 'ข้อมูลลูกค้าบนบิล (ไม่บังคับ)'),
+        el('div', { style: 'display:flex;flex-direction:column;gap:10px;margin-top:10px' }, custName, custPhone, note))
+    ], footerBtn);
+    renderLines();
+    setTimeout(function () { bar.input.focus(); }, 100);
+
+    footerBtn.addEventListener('click', function () {
+      var c = update();
+      if (footerBtn.disabled) return;
+      if (c.over.length) { showError({ code: 'INSUFFICIENT_STOCK', message: c.over.map(function (l) { return l.product.name + ' (' + l.product.sku + ') พร้อมขายมี ' + l.product.balance.available + ' แต่ใส่ ' + l.qty; }).join('\n') }); return; }
+      var rows = [['ช่องทาง', channel.name], ['วิธีรับเงิน', payment === 'CASH' ? 'เงินสด' : 'โอนเงิน'], ['ยอดสุทธิ', money(c.total) + ' บาท']];
+      if (c.disc) rows.splice(2, 0, ['ส่วนลดท้ายบิล', money(c.disc)]);
+      if (payment === 'CASH' && c.cash != null) rows.push(['รับเงินมา / ทอน', money(c.cash) + ' / ' + money(r2(c.cash - c.total))]);
+      confirmSheet({
+        title: 'ยืนยันขายและตัดสต๊อก', confirmText: 'ยืนยันขาย ' + money(c.total) + ' บาท', rows: rows,
+        lines: lines.map(function (l) { var pr = priceOf(l); return { sku: l.product.sku, name: l.product.name, unit: l.product.unit, qty: l.qty, extra: '@' + money(pr) + ' = ' + money(r2(pr * l.qty)), sign: '−' }; })
+      }).then(function (ok) {
+        if (!ok) return;
+        var payload = {
+          channelId: channel.channelId, paymentMethod: payment, billDiscount: c.disc || 0, expectedTotal: c.total,
+          cashReceived: payment === 'CASH' && c.cash != null ? c.cash : '',
+          lines: lines.map(function (l) { return { sku: l.product.sku, qty: l.qty, unitPrice: priceOf(l) }; }),
+          customerName: custName.value.trim(), customerPhone: custPhone.value.trim(), note: note.value.trim()
+        };
+        submitWrite('pos.sale', payload, 'ขายหน้าร้าน ' + money(c.total) + ' บาท').then(function (d) {
+          if (!d) return;
+          replaceTop(posResultView, { data: d, channelId: channel.channelId });
+        }).catch(showError);
+      });
+    });
+  }
+
+  function posResultView(app, st) {
+    var d = st.data;
+    beep(true);
+    page(app, 'ขายหน้าร้าน', [
+      el('div', { class: 'card result' },
+        el('div', { class: 'big' }, icon('check')),
+        el('h2', null, d.message),
+        el('div', { class: 'muted', style: 'margin-top:6px' }, 'เลขบิล (' + d.channelName + ')'),
+        el('div', { class: 'doc' }, d.billNo),
+        el('div', { class: 'pos-result-total' }, money(d.total) + ' บาท'),
+        el('div', { class: 'muted' }, d.paymentMethod === 'CASH' ? 'เงินสด' + (d.cashReceived ? ' · รับมา ' + money(d.cashReceived) : '') : 'โอนเงิน'),
+        d.paymentMethod === 'CASH' && d.cashReceived ? el('div', { class: 'pos-change-big' }, 'เงินทอน ', el('b', null, money(d.change) + ' บาท')) : null,
+        el('div', { style: 'margin-top:14px' }, el('button', { class: 'btn btn-outline btn-block', onclick: function () { printBill(d.bill, false); } }, icon('printer'), 'พิมพ์บิลเงินสด (' + paperSize() + ')'))),
+      d.noListPrice && d.noListPrice.length ? el('div', { class: 'banner warn' }, icon('alert'), el('div', null, 'สินค้า ' + d.noListPrice.join(', ') + ' ยังไม่มีราคาขายหลัก แจ้งผู้ดูแลตั้งราคาเพื่อให้ราคาขึ้นเองครั้งต่อไป')) : null,
+      el('div', { class: 'card' }, el('h3', null, 'ยอดคงเหลือหลังขาย'),
+        (d.lines || []).map(function (l) {
+          return el('div', { class: 'row', style: 'padding:8px 0;border-bottom:1px solid var(--line)' },
+            el('div', { class: 'grow' }, el('div', { style: 'font-weight:600' }, l.name), el('div', { class: 'small muted mono' }, l.sku)),
+            el('div', { class: 'right' }, el('div', { style: 'font-weight:700' }, '−' + fmt(l.qty) + ' ' + l.unit), el('div', { class: 'small muted' }, 'พร้อมขาย ' + fmt(l.available))));
+        }))
+    ], [
+      el('button', { class: 'btn btn-outline', style: 'flex:1', onclick: home }, icon('home'), 'หน้าหลัก'),
+      el('button', { class: 'btn btn-primary', style: 'flex:2', onclick: function () { replaceTop(viewPos, { channelId: st.channelId }); } }, 'ขายบิลถัดไป')
+    ]);
+  }
+
+  /* ================================================================ */
+  /* พิมพ์เอกสาร: บิลเงินสด (ขายตรง) / ใบรายการสินค้า (แพลตฟอร์ม)         */
+  /* ไม่เก็บเป็นไฟล์ — สร้างจากข้อมูลทุกครั้งที่พิมพ์ (บันทึกเป็น PDF ได้จากหน้าต่างพิมพ์) */
+  /* ================================================================ */
+  function paperSize() { return String(State.settings.PAPER_SIZE || 'A5').toUpperCase() === 'A4' ? 'A4' : 'A5'; }
+
+  var TH_NUM = ['ศูนย์', 'หนึ่ง', 'สอง', 'สาม', 'สี่', 'ห้า', 'หก', 'เจ็ด', 'แปด', 'เก้า'];
+  var TH_POS = ['', 'สิบ', 'ร้อย', 'พัน', 'หมื่น', 'แสน'];
+  function thaiInt(s) {
+    s = String(s).replace(/^0+/, '');
+    if (!s) return '';
+    if (s.length > 6) {
+      var head = s.slice(0, s.length - 6), tail = s.slice(-6);
+      return thaiInt(head) + 'ล้าน' + thaiInt(tail);
+    }
+    var out = '', n = s.length;
+    for (var i = 0; i < n; i++) {
+      var d = Number(s.charAt(i)), pos = n - i - 1;
+      if (!d) continue;
+      if (pos === 1 && d === 1) out += 'สิบ';
+      else if (pos === 1 && d === 2) out += 'ยี่สิบ';
+      else if (pos === 0 && d === 1 && n > 1) out += 'เอ็ด';
+      else out += TH_NUM[d] + TH_POS[pos];
+    }
+    return out;
+  }
+  /** จำนวนเงินเป็นตัวอักษร เช่น 1,469.00 → หนึ่งพันสี่ร้อยหกสิบเก้าบาทถ้วน */
+  function bahtText(n) {
+    var v = r2(n);
+    if (v < 0) return 'ลบ' + bahtText(-v);
+    var parts = v.toFixed(2).split('.');
+    var baht = thaiInt(parts[0]), st = thaiInt(parts[1]);
+    return (baht || (st ? '' : 'ศูนย์')) + (baht || !st ? 'บาท' : '') + (st ? st + 'สตางค์' : 'ถ้วน');
+  }
+
+  function thDate(s) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})(?: (\d{2}):(\d{2}))?/.exec(String(s || ''));
+    if (!m) return String(s || '');
+    var mon = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'][Number(m[2]) - 1];
+    return Number(m[3]) + ' ' + mon + ' ' + (Number(m[1]) + 543) + (m[4] ? ' เวลา ' + m[4] + ':' + m[5] + ' น.' : '');
+  }
+
+  function docHeader(h, title, stamp) {
+    h = h || {};
+    return el('div', { class: 'doc-head' },
+      el('div', { class: 'doc-shop' },
+        el('div', { class: 'doc-shop-name' }, h.name || State.settings.SHOP_NAME || State.settings.COMPANY_NAME || ''),
+        h.address ? el('div', null, h.address) : null,
+        h.phone || h.taxId ? el('div', null, [h.phone ? 'โทร ' + h.phone : '', h.phone && h.taxId ? '   ' : '', h.taxId ? 'เลขประจำตัวผู้เสียภาษี ' + h.taxId : ''].join('')) : null),
+      el('div', { class: 'doc-title' }, el('div', null, title), stamp ? el('div', { class: 'doc-stamp' }, stamp) : null));
+  }
+
+  /** บิลเงินสด (DOM สำหรับพิมพ์และแสดงตัวอย่าง) */
+  function billDoc(b, copy) {
+    var cancelled = b.status === 'CANCELLED';
+    var anyDisc = b.items.some(function (it) { return it.lineDiscount > 0; });
+    var head = el('tr', null, el('th', { class: 'c-no' }, 'ลำดับ'), el('th', null, 'รายการ'), el('th', { class: 'num' }, 'จำนวน'),
+      el('th', { class: 'num' }, 'ราคา/หน่วย'), anyDisc ? el('th', { class: 'num' }, 'ส่วนลด') : null, el('th', { class: 'num' }, 'จำนวนเงิน'));
+    var body = b.items.map(function (it, i) {
+      var shown = it.lineDiscount > 0 && it.listPrice != null ? it.listPrice : it.unitPrice;
+      return el('tr', null, el('td', { class: 'c-no' }, String(i + 1)),
+        el('td', null, el('div', null, it.name), el('div', { class: 'doc-sku' }, it.sku)),
+        el('td', { class: 'num' }, fmt(it.qty) + ' ' + it.unit), el('td', { class: 'num' }, money(shown)),
+        anyDisc ? el('td', { class: 'num' }, it.lineDiscount ? money(it.lineDiscount) : '') : null,
+        el('td', { class: 'num' }, money(it.lineTotal)));
+    });
+    var gross = r2(b.subtotal + b.lineDiscount);
+    var sums = [];
+    if (b.lineDiscount || b.billDiscount) {
+      sums.push(['รวมเป็นเงิน', money(gross)]);
+      if (b.lineDiscount) sums.push(['ส่วนลดรายการ', '−' + money(b.lineDiscount)]);
+      if (b.billDiscount) sums.push(['ส่วนลดท้ายบิล', '−' + money(b.billDiscount)]);
+    }
+    var pay = b.paymentMethod === 'CASH' ? 'เงินสด' + (b.cashReceived ? '   รับเงิน ' + money(b.cashReceived) + '   เงินทอน ' + money(b.change) : '') : 'โอนเงิน';
+    return el('div', { class: 'doc doc-bill' + (cancelled ? ' is-cancelled' : '') },
+      docHeader(b.header, 'บิลเงินสด', cancelled ? 'ยกเลิกแล้ว' : (copy ? 'สำเนา' : 'ต้นฉบับ')),
+      el('div', { class: 'doc-meta' },
+        el('div', null, el('span', null, 'เลขที่ '), el('b', null, b.billNo)),
+        el('div', null, el('span', null, 'วันที่ '), thDate(b.createdAt)),
+        el('div', null, el('span', null, 'ลูกค้า '), b.customerName || 'ลูกค้าทั่วไป', b.customerPhone ? '  โทร ' + b.customerPhone : ''),
+        el('div', null, el('span', null, 'ช่องทาง '), b.channelName)),
+      el('table', { class: 'doc-table' }, el('thead', null, head), el('tbody', null, body)),
+      el('div', { class: 'doc-foot' },
+        el('div', { class: 'doc-words' }, el('div', { class: 'doc-words-l' }, 'ตัวอักษร'), el('div', null, '(' + bahtText(b.total) + ')'),
+          el('div', { class: 'doc-pay' }, 'ชำระโดย ' + pay)),
+        el('div', { class: 'doc-sums' },
+          sums.map(function (s) { return el('div', { class: 'doc-sum' }, el('span', null, s[0]), el('span', null, s[1])); }),
+          el('div', { class: 'doc-sum doc-grand' }, el('span', null, 'ยอดสุทธิ'), el('span', null, money(b.total))))),
+      b.note ? el('div', { class: 'doc-note' }, 'หมายเหตุ: ' + b.note) : null,
+      el('div', { class: 'doc-sign' },
+        el('div', null, el('div', { class: 'doc-line' }), 'ผู้รับเงิน  ' + (b.seller || '')),
+        el('div', null, el('div', { class: 'doc-line' }), 'ผู้ซื้อ')),
+      b.header && b.header.footer ? el('div', { class: 'doc-thanks' }, b.header.footer) : null);
+  }
+
+  /** ใบรายการสินค้า (ออเดอร์แพลตฟอร์ม — ไม่มีราคา) */
+  function packingDoc(o, copy) {
+    var cancelled = o.status === 'CANCELLED';
+    var total = 0;
+    var rows = (o.items || []).map(function (it, i) {
+      total += it.qty;
+      return el('tr', null, el('td', { class: 'c-no' }, String(i + 1)), el('td', { class: 'doc-sku-col' }, it.sku), el('td', null, it.name),
+        el('td', { class: 'num' }, fmt(it.qty)), el('td', null, it.unit), el('td', { class: 'c-check' }, el('span', { class: 'doc-box' })));
+    });
+    var h = { name: State.settings.SHOP_NAME || State.settings.COMPANY_NAME, address: State.settings.SHOP_ADDRESS, phone: State.settings.SHOP_PHONE };
+    return el('div', { class: 'doc doc-pack' + (cancelled ? ' is-cancelled' : '') },
+      docHeader(h, 'ใบรายการสินค้า', cancelled ? 'ยกเลิกแล้ว' : (copy ? 'สำเนา' : null)),
+      el('div', { class: 'doc-meta' },
+        el('div', null, el('span', null, 'ช่องทาง '), el('b', null, o.channelName)),
+        el('div', null, el('span', null, 'เลขออเดอร์ '), el('b', { class: 'doc-order' }, o.orderNo)),
+        el('div', null, el('span', null, 'วันที่แพ็ก '), thDate(o.completedAt || o.createdAt)),
+        el('div', null, el('span', null, 'ผู้แพ็ก '), o.createdBy || '')),
+      el('table', { class: 'doc-table' },
+        el('thead', null, el('tr', null, el('th', { class: 'c-no' }, 'ลำดับ'), el('th', null, 'รหัสสินค้า'), el('th', null, 'รายการ'), el('th', { class: 'num' }, 'จำนวน'), el('th', null, 'หน่วย'), el('th', { class: 'c-check' }, 'ตรวจ'))),
+        el('tbody', null, rows)),
+      el('div', { class: 'doc-pack-total' }, 'รวม ' + (o.items || []).length + ' รายการ  ·  ' + fmt(total) + ' ชิ้น'),
+      el('div', { class: 'doc-sign' },
+        el('div', null, el('div', { class: 'doc-line' }), 'ผู้แพ็ก'),
+        el('div', null, el('div', { class: 'doc-line' }), 'ผู้ตรวจ')));
+  }
+
+  /** สั่งพิมพ์ตามขนาดกระดาษในหน้าตั้งค่า (A4/A5) */
+  function printDocNode(node, label) {
+    var size = paperSize();
+    var root = $('#print-root');
+    if (!root) { root = el('div', { id: 'print-root', 'aria-hidden': 'true' }); document.body.appendChild(root); }
+    clear(root);
+    root.className = 'paper-' + size.toLowerCase();
+    root.appendChild(node);
+    var st = $('#print-page-style');
+    if (!st) { st = el('style', { id: 'print-page-style' }); document.head.appendChild(st); }
+    st.textContent = '@page { size: ' + size + ' portrait; margin: ' + (size === 'A4' ? '14mm 14mm 16mm' : '9mm 9mm 12mm') + '; @bottom-right { content: "หน้า " counter(page) "/" counter(pages); font-size: 8pt; color: #555; font-family: \'IBM Plex Sans Thai\', sans-serif; }' +
+      (label ? ' @top-right { content: ' + JSON.stringify(String(label).replace(/[\\"]/g, '')) + '; font-size: 8pt; color: #555; font-family: \'IBM Plex Sans Thai\', sans-serif; }' : '') + ' }';
+    window.__lastPrint = { size: size, at: Date.now() };
+    setTimeout(function () { try { window.print(); } catch (e) { toast('เครื่องนี้สั่งพิมพ์ไม่ได้', 'error'); } }, 60);
+  }
+
+  /** ใน LINE บนมือถือ หน้าต่างพิมพ์มักไม่ขึ้น → เสนอเปิดในเบราว์เซอร์ */
+  function printGuard(deep) {
+    var inLine = false;
+    try { inLine = !!(window.liff && liff.isInClient && liff.isInClient()); } catch (e) { inLine = false; }
+    if (!inLine) return Promise.resolve('print');
+    return sheet(function (close) {
+      return [el('h2', null, 'พิมพ์จากในแอป LINE'),
+        el('div', { class: 'msg' }, 'แอป LINE บนมือถือส่วนใหญ่สั่งพิมพ์ไม่ได้ แนะนำให้เปิดเอกสารนี้ในเบราว์เซอร์ (Chrome/Safari) หรือเปิดระบบบนคอมพิวเตอร์ที่ต่อเครื่องพิมพ์ แล้วไปที่ "บิลและเอกสาร"'),
+        el('div', { class: 'actions' },
+          el('button', { class: 'btn btn-primary btn-block', onclick: function () { close('open'); } }, 'เปิดเอกสารนี้ในเบราว์เซอร์'),
+          el('button', { class: 'btn btn-outline btn-block', onclick: function () { close('print'); } }, 'ลองพิมพ์จากเครื่องนี้'),
+          el('button', { class: 'btn btn-outline btn-block', onclick: function () { close(null); } }, 'ปิด'))];
+    }).then(function (c) {
+      if (c === 'open') {
+        try { liff.openWindow({ url: 'https://liff.line.me/' + C.LIFF_ID + '?' + deep, external: true }); } catch (e) { toast('เปิดเบราว์เซอร์ไม่ได้: ' + e.message, 'error'); }
+        return null;
+      }
+      return c;
+    });
+  }
+
+  function printBill(b, copy) {
+    return printGuard('doc=bill&id=' + encodeURIComponent(b.internalOrderId)).then(function (c) { if (c === 'print') printDocNode(billDoc(b, copy), 'บิลเงินสด ' + b.billNo); });
+  }
+  function printPacking(o, copy) {
+    return printGuard('doc=pack&ch=' + encodeURIComponent(o.channelId) + '&no=' + encodeURIComponent(o.orderNo)).then(function (c) { if (c === 'print') printDocNode(packingDoc(o, copy), o.channelName + ' ' + o.orderNo); });
+  }
+
+  /** หน้าตัวอย่างเอกสาร (เห็นก่อนพิมพ์) */
+  function docPreview(node) {
+    return el('div', { class: 'paper-wrap' }, el('div', { class: 'paper paper-' + paperSize().toLowerCase() }, node));
+  }
+
+  /* ================================================================ */
+  /* บิลและเอกสาร: ยอดขายตรงวันนี้ / พิมพ์บิลซ้ำ / ใบรายการสินค้าแพลตฟอร์ม  */
+  /* ================================================================ */
+  function viewDocs(app, st) {
+    st = st || { tab: 'bills', date: todayStr(0), q: '' };
+    var tabs = el('div', { class: 'tabs' },
+      el('button', { class: 'chip' + (st.tab === 'bills' ? ' on' : ''), onclick: function () { replaceTop(viewDocs, { tab: 'bills', date: st.date || todayStr(0), q: '' }); } }, 'บิลขายตรง'),
+      el('button', { class: 'chip' + (st.tab === 'pack' ? ' on' : ''), onclick: function () { replaceTop(viewDocs, { tab: 'pack' }); } }, 'ใบรายการสินค้า (แพลตฟอร์ม)'));
+    if (st.tab === 'pack') {
+      var plats = platformChannels();
+      var pick = st.channel || plats[0];
+      var holder = el('div', { style: 'display:flex;flex-direction:column;gap:12px' });
+      page(app, 'บิลและเอกสาร', [tabs, holder]);
+      if (!plats.length) { append(holder, el('div', { class: 'banner warn' }, icon('alert'), el('div', null, 'ยังไม่มีช่องทางแพลตฟอร์ม'))); return; }
+      var bar = scanBar({
+        title: 'สแกนเลขออเดอร์', placeholder: 'สแกน / พิมพ์เลขออเดอร์ แล้วกด Enter',
+        onCode: function (no) {
+          busy('กำลังค้นหาออเดอร์…');
+          Api.read('order.get', { channelId: pick.channelId, orderNo: no }).then(function (d) { unbusy(); beep(true); go(viewPackingDoc, { order: d.order }); }).catch(showError);
+        }
+      });
+      append(holder, [
+        el('div', { class: 'label' }, 'ช่องทาง'),
+        el('div', { class: 'tabs' }, plats.map(function (c) { return el('button', { class: 'chip' + (c.channelId === pick.channelId ? ' on' : ''), onclick: function () { replaceTop(viewDocs, { tab: 'pack', channel: c }); } }, c.name); })),
+        el('div', { class: 'field' }, el('div', { class: 'label' }, 'เลขออเดอร์'), bar),
+        el('div', { class: 'hint' }, 'พิมพ์ใบรายการสินค้าซ้ำของออเดอร์ที่แพ็กแล้ว (ไม่มีราคา — บิล/ใบเสร็จของแพลตฟอร์มเป็นงานของแผนกทำบิล)')]);
+      setTimeout(function () { bar.input.focus(); }, 100);
+      return;
+    }
+    var date = el('input', { class: 'input', type: 'date', value: st.date || todayStr(0), max: todayStr(0) });
+    var q = el('input', { class: 'input mono', placeholder: 'ค้นหาเลขบิล / ชื่อลูกค้า', value: st.q || '', autocapitalize: 'characters', enterkeyhint: 'search' });
+    var out = el('div', { style: 'display:flex;flex-direction:column;gap:12px' });
+    function apply() { replaceTop(viewDocs, { tab: 'bills', date: date.value || todayStr(0), q: q.value.trim() }); }
+    date.addEventListener('change', apply);
+    q.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); apply(); } });
+    page(app, 'บิลและเอกสาร', [tabs,
+      el('div', { class: 'card', style: 'display:flex;flex-direction:column;gap:10px' },
+        el('div', { class: 'row' }, el('div', { class: 'field grow' }, el('label', null, 'วันที่'), date)),
+        el('div', { class: 'row' }, el('div', { class: 'grow' }, q), el('button', { class: 'btn btn-primary', style: 'min-height:50px', onclick: apply }, icon('search')))),
+      out], null, el('button', { class: 'icon-btn', 'aria-label': 'รีเฟรช', onclick: apply }, icon('refresh')));
+    append(out, loadingBox());
+    Api.read('pos.bills', { date: date.value, q: st.q || '' }).then(function (d) {
+      clear(out);
+      var s = d.summary;
+      append(out, el('div', { class: 'card day-sum' },
+        el('div', { class: 'day-sum-head' }, el('span', null, d.date === todayStr(0) ? 'ยอดขายตรงวันนี้' : 'ยอดขายตรง ' + thDate(d.date)), el('span', { class: 'muted small' }, fmt(s.billCount) + ' บิล · ' + fmt(s.qty) + ' ชิ้น')),
+        el('div', { class: 'day-sum-total' }, money(s.total)),
+        el('div', { class: 'day-sum-split' },
+          el('div', null, el('div', { class: 'small muted' }, 'เงินสด (นับลิ้นชัก)'), el('b', null, money(s.cash))),
+          el('div', null, el('div', { class: 'small muted' }, 'โอนเงิน'), el('b', null, money(s.transfer)))),
+        s.discount ? el('div', { class: 'small muted' }, 'ให้ส่วนลดรวม ' + money(s.discount) + ' บาท') : null,
+        s.cancelledCount ? el('div', { class: 'small muted' }, 'ไม่นับบิลที่ยกเลิก ' + fmt(s.cancelledCount) + ' ใบ') : null,
+        d.showProfit && s.billCount ? (s.profitCount ? el('div', { class: 'day-sum-profit', style: 'color:' + profitColor(s.profit) }, 'กำไรประมาณ ' + money(s.profit) + ' บาท',
+          s.noProfitCount ? el('div', { class: 'small muted', style: 'font-weight:400' }, '(ยังไม่รวม ' + s.noProfitCount + ' บิลที่สินค้ายังไม่มีต้นทุน — กรอกต้นทุนได้ที่เมนูการเงิน)') : null)
+          : el('div', { class: 'day-sum-profit small muted', style: 'font-weight:400' }, 'กำไร: ยังคำนวณไม่ได้ เพราะสินค้าในบิลยังไม่มีต้นทุน (กรอกได้ที่เมนูการเงิน)')) : null));
+      if (st.q) append(out, el('div', { class: 'row' }, el('div', { class: 'grow small muted' }, 'ผลค้นหา "' + st.q + '" (ทุกวัน) — ' + d.items.length + ' บิล'),
+        el('button', { class: 'chip', onclick: function () { replaceTop(viewDocs, { tab: 'bills', date: st.date, q: '' }); } }, 'ล้างค้นหา')));
+      if (!d.items.length) { append(out, el('div', { class: 'card empty' }, st.q ? 'ไม่พบบิล' : 'ยังไม่มีบิลขายตรงในวันนี้')); return; }
+      append(out, el('div', { class: 'card' }, d.items.map(function (b) {
+        var cancelled = b.status === 'CANCELLED';
+        return el('button', { class: 'fin-row', onclick: function () { go(viewBillDoc, { internalOrderId: b.internalOrderId }); } },
+          el('div', { class: 'grow' },
+            el('div', { class: 'mono', style: 'font-weight:600;word-break:break-all' + (cancelled ? ';text-decoration:line-through' : '') }, b.billNo),
+            el('div', { class: 'small muted' }, String(b.createdAt).substring(st.q ? 0 : 11, 16) + ' · ' + b.channelName + (b.customerName ? ' · ' + b.customerName : '') + ' · ' + b.seller)),
+          el('div', { class: 'right' },
+            el('div', { style: 'font-weight:700' + (cancelled ? ';color:var(--ink-3);text-decoration:line-through' : '') }, money(b.total)),
+            el('div', { class: 'small' }, cancelled ? el('span', { class: 'badge c-red' }, 'ยกเลิก') : [el('span', { class: 'badge ' + (b.paymentMethod === 'CASH' ? 'c-green' : 'c-blue') }, b.paymentLabel), b.priceEdited ? el('span', { class: 'badge c-amber', style: 'margin-left:4px' }, 'มีส่วนลด') : null])));
+      })));
+    }).catch(function (e) { clear(out); append(out, errorBox(e)); });
+  }
+
+  /** ดูบิล + พิมพ์ซ้ำ (สำเนา) */
+  function viewBillDoc(app, st) {
+    var holder = el('div', { style: 'display:flex;flex-direction:column;gap:12px' });
+    var btn = el('button', { class: 'btn btn-primary btn-lg', style: 'flex:1', disabled: true }, icon('printer'), 'พิมพ์สำเนา (' + paperSize() + ')');
+    page(app, 'บิลเงินสด', holder, btn);
+    append(holder, loadingBox());
+    Api.read('pos.bill', { internalOrderId: st.internalOrderId, billNo: st.billNo }).then(function (d) {
+      clear(holder);
+      var b = d.bill;
+      if (b.status === 'CANCELLED') append(holder, el('div', { class: 'banner error' }, icon('alert'), el('div', null, 'บิลนี้ถูกยกเลิกแล้ว (พิมพ์ได้โดยมีตรา "ยกเลิกแล้ว")')));
+      else if (b.status === 'RETURNED_PARTIAL' || b.status === 'RETURNED_FULL') append(holder, el('div', { class: 'banner warn' }, icon('alert'), el('div', null, 'มีการรับคืนสินค้าจากบิลนี้แล้ว — บิลแสดงรายการตอนขาย')));
+      append(holder, docPreview(billDoc(b, true)));
+      btn.disabled = false;
+      btn.onclick = function () { printBill(b, true); };
+    }).catch(function (e) { clear(holder); append(holder, errorBox(e)); });
+  }
+
+  /** ใบรายการสินค้าของออเดอร์แพลตฟอร์ม */
+  function viewPackingDoc(app, st) {
+    var holder = el('div', { style: 'display:flex;flex-direction:column;gap:12px' });
+    var btn = el('button', { class: 'btn btn-primary btn-lg', style: 'flex:1' }, icon('printer'), 'พิมพ์ใบรายการสินค้า (' + paperSize() + ')');
+    page(app, 'ใบรายการสินค้า', holder, btn);
+    function show(o) {
+      clear(holder);
+      if (o.status === 'CANCELLED') append(holder, el('div', { class: 'banner error' }, icon('alert'), el('div', null, 'ออเดอร์นี้ถูกยกเลิกแล้ว')));
+      append(holder, docPreview(packingDoc(o, !st.fresh)));
+      btn.onclick = function () { printPacking(o, !st.fresh); };
+    }
+    if (st.order) { show(st.order); return; }
+    append(holder, loadingBox()); btn.disabled = true;
+    Api.read('order.get', { channelId: st.channelId, orderNo: st.orderNo }).then(function (d) { btn.disabled = false; show(d.order); })
+      .catch(function (e) { clear(holder); append(holder, errorBox(e)); });
+  }
+
+  /* ================================================================ */
+  /* ราคาขายหลัก (ADMIN แก้ได้)                                          */
+  /* ================================================================ */
+  function priceForm(item) {
+    return sheet(function (close) {
+      var inp = moneyInput(item.salePrice, 'ราคาต่อ ' + item.unit);
+      inp.setAttribute('autofocus', '');
+      var note = el('input', { class: 'input', maxLength: 200, value: item.note || '', placeholder: 'เช่น ราคาโปรเดือนนี้' });
+      var err = el('div', { class: 'err-text' });
+      var save = el('button', { class: 'btn btn-primary btn-block btn-lg' }, 'บันทึกราคาขาย');
+      function doSave() {
+        var v = parseMoney(inp.value);
+        if (v == null) { err.textContent = 'กรุณาใส่ตัวเลข 0 ขึ้นไป (ทศนิยมไม่เกิน 2 ตำแหน่ง)'; return; }
+        save.disabled = true; err.textContent = '';
+        submitWrite('product.price.save', { sku: item.sku, salePrice: v, note: note.value.trim() }, 'ราคาขาย ' + item.sku)
+          .then(function (d) { if (d) { productCache = {}; toast(d.message, 'ok'); close(true); } else close(false); })
+          .catch(function (e) { save.disabled = false; err.textContent = e.message; beep(false); });
+      }
+      save.addEventListener('click', doSave);
+      inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); doSave(); } });
+      return [el('h2', null, 'ราคาขายหลัก'),
+        el('div', null, el('div', { style: 'font-weight:600' }, item.name), el('div', { class: 'small muted mono' }, item.sku)),
+        el('div', { class: 'field' }, el('label', null, 'ราคาขายต่อ ' + item.unit + ' (บาท)'), inp),
+        el('div', { class: 'hint' }, 'ราคานี้ขึ้นอัตโนมัติในเมนูขายหน้าร้าน พนักงานยังแก้ราคา/ให้ส่วนลดในแต่ละบิลได้'),
+        el('div', { class: 'field' }, el('label', null, 'หมายเหตุ (ถ้ามี)'), note),
+        item.updatedAt ? el('div', { class: 'small muted' }, 'แก้ล่าสุด ' + item.updatedAt + ' โดย ' + item.updatedBy) : null,
+        err, save, el('button', { class: 'btn btn-outline btn-block', onclick: function () { close(false); } }, 'ยกเลิก')];
+    });
+  }
+
+  function viewPrices(app, st) {
+    st = st || {};
+    var out = el('div', { style: 'display:flex;flex-direction:column;gap:10px' });
+    var bar = scanBar({ title: 'สแกนสินค้า', placeholder: 'ค้นหา/สแกน SKU หรือชื่อสินค้า', onCode: function (v) { st.q = v; load(true); } });
+    page(app, 'ราคาขายหลัก', [
+      el('div', { class: 'tabs' },
+        el('button', { class: 'chip' + (!st.onlyMissing ? ' on' : ''), onclick: function () { replaceTop(viewPrices, { onlyMissing: false }); } }, 'ทั้งหมด'),
+        el('button', { class: 'chip' + (st.onlyMissing ? ' on' : ''), onclick: function () { replaceTop(viewPrices, { onlyMissing: true }); } }, 'ยังไม่มีราคา')),
+      bar, out
+    ]);
+    function open(item) { if (!State.perms.admin) return; priceForm(item).then(function (ok) { if (ok) load(false); }); }
+    function load(auto) {
+      clear(out); append(out, loadingBox());
+      Api.read('product.prices', { q: st.q || '', onlyMissing: !!st.onlyMissing }).then(function (d) {
+        clear(out);
+        if (auto && d.items.length === 1) open(d.items[0]);
+        if (!st.q && d.missingCount && !st.onlyMissing) append(out, el('div', { class: 'banner warn' }, icon('alert'), el('div', null, 'สินค้า ' + fmt(d.missingCount) + ' รายการยังไม่มีราคาขายหลัก')));
+        if (st.q) append(out, el('div', { class: 'row' }, el('div', { class: 'grow small muted' }, 'ผลค้นหา "' + st.q + '" — ' + fmt(d.total) + ' รายการ'),
+          el('button', { class: 'chip', onclick: function () { st.q = ''; load(false); } }, 'ล้างค้นหา')));
+        if (!d.items.length) { append(out, el('div', { class: 'card empty' }, st.onlyMissing && !st.q ? 'สินค้าทุกตัวมีราคาขายแล้ว' : 'ไม่พบสินค้า')); return; }
+        append(out, d.items.map(function (it) {
+          return el('button', { class: 'list-btn', onclick: function () { open(it); } },
+            el('div', { class: 'grow' }, el('div', { style: 'font-weight:600' }, it.name), el('div', { class: 'small muted mono' }, it.sku)),
+            it.salePrice == null ? el('span', { class: 'badge c-red' }, 'ยังไม่มีราคา')
+              : el('div', { class: 'right' }, el('div', { style: 'font-weight:700' }, money(it.salePrice)), el('div', { class: 'small muted' }, 'บาท/' + it.unit)));
+        }));
+        if (d.truncated) append(out, el('div', { class: 'hint' }, 'แสดง ' + d.items.length + ' รายการแรก — พิมพ์ค้นหาเพื่อหาสินค้าอื่น'));
+      }).catch(function (e) { clear(out); append(out, errorBox(e)); });
+    }
+    load(false);
+  }
+
+  /* ================================================================ */
   /* ตั้งค่าระบบ (ADMIN)                                                */
   /* ================================================================ */
   function viewAdmin(app, st) {
@@ -1743,7 +2337,7 @@
         append(body, el('button', { class: 'btn btn-primary btn-block', onclick: function () { channelForm(null).then(function (s) { if (s) { refreshBoot(); reload(); } }); } }, icon('plus'), 'เพิ่มช่องทางขาย'));
         d.channels.forEach(function (c) {
           append(body, el('button', { class: 'list-btn', onclick: function () { channelForm(c).then(function (s) { if (s) { refreshBoot(); reload(); } }); } },
-            el('div', { class: 'grow' }, el('div', { style: 'font-weight:600' }, c.name), el('div', { class: 'small muted' }, c.channelId + ' · ' + (c.mode === 'AUTO' ? 'ออกเลขอัตโนมัติ ' + c.prefix + '-yyyyMMdd-0001' : 'สแกนเลขออเดอร์จริง'))),
+            el('div', { class: 'grow' }, el('div', { style: 'font-weight:600' }, c.name), el('div', { class: 'small muted' }, c.channelId + ' · ' + (c.mode === 'AUTO' ? 'ขายตรง · บิลเงินสด เลข ' + c.prefix + '-yyyyMMdd-0001' : 'แพลตฟอร์ม · ใบรายการสินค้า'))),
             el('span', { class: 'badge ' + (c.active ? 'c-green' : 'c-gray') }, c.active ? 'เปิด' : 'ปิด')));
         });
       }).catch(fail);
@@ -1769,13 +2363,14 @@
         } }, icon('plus'), 'สร้างสินค้าใหม่'),
         el('button', { class: 'btn btn-outline btn-block', onclick: function () {
           productPicker({ includeInactive: true, allowEmpty: true }).then(function (p) { if (p) productForm(p, false); });
-        } }, icon('search'), 'ค้นหาและแก้ไขสินค้า')]);
+        } }, icon('search'), 'ค้นหาและแก้ไขสินค้า'),
+        el('button', { class: 'btn btn-outline btn-block', onclick: function () { go(viewPrices, {}); } }, icon('coin'), 'ราคาขายหลัก')]);
     } else if (st.tab === 'settings') {
       Api.read('admin.settings', {}).then(function (d) {
         clear(body);
         d.settings.forEach(function (s) {
           append(body, el('button', { class: 'list-btn', disabled: !s.editable, onclick: function () { settingForm(s).then(function (ok) { if (ok) { refreshBoot(); reload(); } }); } },
-            el('div', { class: 'grow' }, el('div', { style: 'font-weight:600' }, s.description), el('div', { class: 'small muted' }, s.key), el('div', { style: 'word-break:break-word' }, s.value)),
+            el('div', { class: 'grow' }, el('div', { style: 'font-weight:600' }, s.description), el('div', { class: 'small muted' }, s.key), el('div', { style: 'word-break:break-word' + (s.value ? '' : ';color:var(--ink-3)') }, s.value || '(ว่าง)')),
             s.editable ? null : el('span', { class: 'badge c-gray' }, 'ล็อก')));
         });
       }).catch(fail);
@@ -1804,8 +2399,8 @@
       var id = el('input', { class: 'input mono', value: c.channelId || '', readOnly: !isNew, placeholder: 'เช่น FACEBOOK', autocapitalize: 'characters' });
       var name = el('input', { class: 'input', value: c.name || '', placeholder: 'ชื่อที่แสดง' });
       var prefix = el('input', { class: 'input mono', value: c.prefix || '', placeholder: 'เช่น FB', autocapitalize: 'characters' });
-      var prefixF = el('div', { class: 'field' + (c.mode === 'AUTO' ? '' : ' hidden') }, el('label', null, 'คำนำหน้าเลขออเดอร์'), prefix);
-      var mode = choiceGroup([['SCAN', 'สแกนเลขออเดอร์จริง', 'แพลตฟอร์มออนไลน์'], ['AUTO', 'ระบบออกเลขให้', 'ขายเอง/หน้าร้าน']], c.mode, function (v) { prefixF.classList.toggle('hidden', v !== 'AUTO'); });
+      var prefixF = el('div', { class: 'field' + (c.mode === 'AUTO' ? '' : ' hidden') }, el('label', null, 'คำนำหน้าเลขบิล'), prefix);
+      var mode = choiceGroup([['SCAN', 'แพลตฟอร์ม', 'สแกนเลขออเดอร์จริง · ใบรายการสินค้า'], ['AUTO', 'ขายตรง', 'ระบบออกเลขบิล · บิลเงินสด']], c.mode, function (v) { prefixF.classList.toggle('hidden', v !== 'AUTO'); });
       var active = el('input', { type: 'checkbox', checked: c.active !== false, style: 'width:22px;height:22px' });
       var err = el('div', { class: 'err-text' });
       var save = el('button', { class: 'btn btn-primary btn-block btn-lg' }, 'บันทึก');
@@ -1817,7 +2412,7 @@
       });
       return [el('h2', null, isNew ? 'เพิ่มช่องทางขาย' : 'แก้ไขช่องทางขาย'),
         el('div', { class: 'field' }, el('label', null, 'รหัสช่องทาง (A-Z, 0-9)'), id), el('div', { class: 'field' }, el('label', null, 'ชื่อช่องทาง'), name),
-        el('div', { class: 'field' }, el('div', { class: 'label' }, 'วิธีระบุเลขออเดอร์'), mode), prefixF,
+        el('div', { class: 'field' }, el('div', { class: 'label' }, 'ประเภทช่องทาง'), mode), prefixF,
         el('label', { class: 'row' }, active, 'เปิดใช้งาน'), err, save, el('button', { class: 'btn btn-outline btn-block', onclick: function () { close(false); } }, 'ยกเลิก')];
     });
   }
@@ -1848,7 +2443,8 @@
     return sheet(function (close) {
       var input;
       if (s.key === 'SCAN_MODE') input = choiceGroup([['QTY', 'สแกนแล้วกรอกจำนวน'], ['EACH', 'สแกนทีละชิ้น (+1)']], s.value);
-      else input = el(/_REASONS$|_TYPES$/.test(s.key) ? 'textarea' : 'input', { class: 'input', value: s.value });
+      else if (s.key === 'PAPER_SIZE') input = choiceGroup([['A5', 'A5', 'บิลทั่วไป ประหยัดกระดาษ'], ['A4', 'A4', 'เต็มแผ่น เหมาะกับรายการยาว']], String(s.value).toUpperCase() === 'A4' ? 'A4' : 'A5');
+      else input = el(/_REASONS$|_TYPES$|^SHOP_ADDRESS$/.test(s.key) ? 'textarea' : 'input', { class: 'input', value: s.value, placeholder: /^(SHOP_|BILL_)/.test(s.key) ? 'เว้นว่างได้' : '' });
       var err = el('div', { class: 'err-text' });
       var save = el('button', { class: 'btn btn-primary btn-block btn-lg' }, 'บันทึก');
       save.addEventListener('click', function () {
@@ -1885,6 +2481,19 @@
   /* ================================================================ */
   /* Boot                                                               */
   /* ================================================================ */
+  /** ลิงก์ตรงไปเอกสาร (เปิดจากปุ่ม "เปิดในเบราว์เซอร์") เช่น ?doc=bill&id=ORD-... */
+  function deepLink() {
+    var sp;
+    try {
+      sp = new URLSearchParams(location.search);
+      if (!sp.get('doc') && sp.get('liff.state')) sp = new URLSearchParams(String(sp.get('liff.state')).replace(/^[^?]*\?/, ''));
+    } catch (e) { return null; }
+    var doc = sp.get('doc');
+    if (doc === 'bill' && sp.get('id')) return [viewBillDoc, { internalOrderId: sp.get('id') }];
+    if (doc === 'pack' && sp.get('ch') && sp.get('no')) return [viewPackingDoc, { channelId: sp.get('ch'), orderNo: sp.get('no') }];
+    return null;
+  }
+
   function configured() {
     return C.LIFF_ID && C.API_URL && C.LIFF_ID.indexOf('YOUR_') !== 0 && C.API_URL.indexOf('YOUR_') < 0;
   }
@@ -1902,7 +2511,9 @@
       var d = j.data;
       State.user = d.user; State.perms = d.perms; State.settings = d.settings; State.channels = d.channels; State.app = d.app;
       stack = [[viewHome]];
-      try { history.replaceState({ d: 1 }, ''); } catch (e) { /* */ }
+      var deep = deepLink();
+      if (deep) stack.push(deep);
+      try { history.replaceState({ d: 1 }, '', deep ? location.pathname : undefined); } catch (e) { /* */ }
       render();
       return checkPending(false).then(function (r) { if (r !== null) render(); });
     }).catch(function (e) {
@@ -1916,6 +2527,6 @@
   }
 
   // เปิดให้ทดสอบอัตโนมัติเข้าถึงสถานะได้ (ไม่มีข้อมูลลับ)
-  window.__WMS__ = { State: State, Scanner: Scanner, Pending: Pending };
+  window.__WMS__ = { State: State, Scanner: Scanner, Pending: Pending, bahtText: bahtText };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
 })();
