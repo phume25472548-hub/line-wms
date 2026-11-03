@@ -400,3 +400,26 @@ textarea.input { min-height: 80px; resize: vertical; }
   .doc-table thead { display: table-header-group; }
   .doc-table tr { break-inside: avoid; }
 }
+
+/* ================================================================ */
+/* v1.3 ภาษาหน้าจอ (ไทย / English / 中文)                                */
+/* ================================================================ */
+html[data-lang="zh"] body { font-family: 'IBM Plex Sans Thai', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', system-ui, sans-serif; }
+.hero { position: relative; }
+.hero .company { padding-right: 84px; }
+.lang-btn { position: absolute; z-index: 5; top: 14px; right: 14px; display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 12px; border: 0; border-radius: 999px; background: rgba(255,255,255,.22); color: #fff; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.lang-btn svg { width: 18px; height: 18px; }
+.lang-btn:active { background: rgba(255,255,255,.35); }
+.boot { position: relative; }
+.lang-btn-boot { position: fixed; background: var(--card, #fff); color: var(--ink, #111); box-shadow: 0 1px 4px rgba(0,0,0,.12); }
+.lang-grid { grid-template-columns: repeat(3, 1fr); }
+.lang-grid .choice { font-size: 17px; justify-content: center; text-align: center; }
+@media (min-width: 768px) { .lang-btn { top: 22px; right: 22px; } }
+@media (hover: hover) { .lang-btn:hover { background: rgba(255,255,255,.32); } .lang-btn-boot:hover { background: var(--bg, #f4f5f7); } }
+/* ข้อความอังกฤษ/จีนยาวกว่าไทย: ให้ปุ่มขึ้นบรรทัดใหม่ได้แทนการล้นจอ (ภาษาไทยคงหน้าตาเดิม) */
+html:not([data-lang="th"]) .btn { white-space: normal; line-height: 1.25; text-align: center; }
+html:not([data-lang="th"]) .choice { min-width: 0; overflow-wrap: break-word; hyphens: auto; }
+@media (max-width: 400px) {
+  html:not([data-lang="th"]) .choice { padding: 12px 10px; font-size: 15px; }
+  html:not([data-lang="th"]) .choice small { font-size: 11.5px; }
+}
