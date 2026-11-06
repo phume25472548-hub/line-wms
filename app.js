@@ -276,6 +276,32 @@
     }
   };
 
+  /** ทดสอบ LINE ID Token กับ Supabase โดยไม่เปลี่ยน API หลักของระบบเดิม */
+  function connectSupabase() {
+    if (!C.SUPABASE_API_URL || !C.SUPABASE_PUBLISHABLE_KEY) {
+      return Promise.reject(appErr('SUPABASE_CONFIG', _t('ยังไม่ได้ตั้งค่า Supabase')));
+    }
+    var ctl = window.AbortController ? new AbortController() : null;
+    var timer = setTimeout(function () { if (ctl) ctl.abort(); }, C.REQUEST_TIMEOUT_MS || 30000);
+    return fetch(C.SUPABASE_API_URL, {
+      method: 'POST',
+      headers: { apikey: C.SUPABASE_PUBLISHABLE_KEY },
+      body: JSON.stringify({ action: 'bootstrap', idToken: Auth.token(), payload: {} }),
+      signal: ctl ? ctl.signal : undefined,
+      cache: 'no-store'
+    }).then(function (res) { return res.text(); }).then(function (raw) {
+      clearTimeout(timer);
+      var json;
+      try { json = JSON.parse(raw); } catch (e) { throw appErr('BAD_RESPONSE', _t('Supabase ตอบกลับไม่ถูกต้อง')); }
+      if (!json.ok) throw appErr(json.error.code, json.error.message, json.error.details);
+      return json.data;
+    }, function (err) {
+      clearTimeout(timer);
+      if (err && err.code) throw err;
+      throw appErr('SUPABASE_NETWORK', _t('เชื่อมต่อ Supabase ไม่สำเร็จ'), null, { network: true });
+    });
+  }
+
   /** รายการที่กำลังบันทึก — เก็บไว้ในเครื่องจนกว่าจะรู้ผลแน่ชัด */
   var Pending = {
     key: 'wms_pending_write',
@@ -2402,12 +2428,26 @@
     } else {
       clear(body);
       var res = el('div');
+      var supabaseRes = el('div');
       append(body, [
         el('div', { class: 'card' }, el('dl', { class: 'kv' },
           el('dt', null, _t('เวอร์ชัน')), el('dd', null, State.app.version),
           el('dt', null, _t('เวอร์ชันหน้าจอ')), el('dd', null, I18N.version),
           el('dt', null, 'API'), el('dd', { class: 'small mono' }, C.API_URL),
+          el('dt', null, 'Supabase (ทดลอง)'), el('dd', { class: 'small mono' }, C.SUPABASE_API_URL || _t('ยังไม่ตั้งค่า')),
           el('dt', null, 'LIFF ID'), el('dd', { class: 'mono' }, C.LIFF_ID))),
+        el('button', { class: 'btn btn-outline btn-block', onclick: function () {
+          clear(supabaseRes); append(supabaseRes, loadingBox());
+          connectSupabase().then(function (d) {
+            clear(supabaseRes);
+            append(supabaseRes, el('div', { class: 'banner ok' }, icon('check'), el('div', null,
+              _t('Supabase ยืนยัน LINE ID และอ่านสิทธิ์ผู้ใช้สำเร็จ · ') + (ROLE_LABEL[d.user.role] || d.user.role) + _t(' · ') + d.channels.length + _t(' ช่องทาง'))));
+          }).catch(function (e) {
+            clear(supabaseRes);
+            append(supabaseRes, el('div', { class: 'banner error' }, icon('alert'), el('div', null, e.message)));
+          });
+        } }, icon('shield'), _t('ทดลองเชื่อมต่อ LINE กับ Supabase')),
+        supabaseRes,
         el('button', { class: 'btn btn-primary btn-block', onclick: function () {
           clear(res); append(res, el('div', { class: 'empty' }, el('div', { class: 'spinner', style: 'margin:0 auto' })));
           Api.read('reconcile', {}).then(function (r) {

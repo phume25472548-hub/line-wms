@@ -9,6 +9,10 @@ window.APP_CONFIG = {
   // URL ของ Google Apps Script Web App ที่ลงท้ายด้วย /exec
   API_URL: 'https://script.google.com/macros/s/AKfycbzFd5t43e2jGl-0G3H1Sdr7eWJ_YaIqLtHPSrTp4wvFWoz7LSqcsvAtaN_6Axc6i6-A/exec',
 
+  // Supabase API สำหรับทดสอบการเชื่อมต่อระหว่างย้ายระบบ (ยังไม่แทน API_URL)
+  SUPABASE_API_URL: 'https://dqipcgoqzikaghojujkg.supabase.co/functions/v1/line-wms-api',
+  SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_r80uS4T7IpvbIMZtwcqtaA_a-eqU1bi',
+
   // เวลารอคำตอบสูงสุดต่อครั้ง (มิลลิวินาที)
   REQUEST_TIMEOUT_MS: 30000
 };
