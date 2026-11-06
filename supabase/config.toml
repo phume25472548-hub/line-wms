@@ -1,0 +1,3 @@
+[functions.line-wms-api]
+# The endpoint verifies LINE ID Tokens itself; these are not Supabase Auth JWTs.
+verify_jwt = false
