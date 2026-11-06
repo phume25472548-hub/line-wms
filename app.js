@@ -881,7 +881,7 @@
       [can.write, _t('ผลตรวจสอบ'), _t('ย้ายของรอตรวจ'), 'shield', 'c-amber', viewInspect],
       [can.write, _t('ยกเลิกออเดอร์'), _t('คืนสต๊อกออเดอร์'), 'xc', 'c-red', viewCancel],
       [true, _t('บิลและเอกสาร'), _t('ยอดขายวันนี้ พิมพ์ซ้ำ'), 'doc', 'c-violet', viewDocs],
-      [true, 'Dashboard', _t('สรุปภาพรวม'), 'chart', 'c-blue', viewDashboard],
+      [true, _t('แดชบอร์ด'), _t('สรุปภาพรวม'), 'chart', 'c-blue', viewDashboard],
       [can.admin, _t('ค่าใช้จ่าย'), _t('บันทึกและดูรายการรายจ่าย'), 'receipt', 'c-amber', viewExpenses],
       [can.admin, _t('การเงิน'), _t('ต้นทุน ยอดเงิน กำไร'), 'coin', 'c-green', viewFinance],
       [can.admin, _t('ตั้งค่าระบบ'), _t('ช่องทาง พนักงาน สินค้า'), 'gear', 'c-gray', viewAdmin]
@@ -1409,6 +1409,15 @@
   /* ================================================================ */
   /* Dashboard                                                          */
   /* ================================================================ */
+  function makeMonthTotals(year, records, expenses) {
+    var byMonth = {};
+    for (var m = 1; m <= 12; m++) byMonth[year + '-' + ('0' + m).slice(-2)] = { income: 0, expense: 0 };
+    (records || []).forEach(function (r) { var k = String(r.receivedDate || '').slice(0, 7); if (byMonth[k]) byMonth[k].income += Number(r.receivedAmount) || 0; });
+    (expenses || []).forEach(function (e) { var k = String(e.date || '').slice(0, 7); if (byMonth[k]) byMonth[k].expense += Number(e.amount) || 0; });
+    var total = Object.keys(byMonth).reduce(function (s, k) { s.income += byMonth[k].income; s.expense += byMonth[k].expense; return s; }, { income: 0, expense: 0 });
+    return { byMonth: byMonth, total: total };
+  }
+
   function viewDashboard(app) {
     var out = el('div', { style: 'display:flex;flex-direction:column;gap:14px' });
     var from = el('input', { class: 'input', type: 'date', value: todayStr(6) });
@@ -1480,25 +1489,80 @@
           el('div', { class: 'card' }, el('h3', null, _t('ความเคลื่อนไหวล่าสุด')), d.recent.length ? d.recent.map(txRow) : el('div', { class: 'empty' }, _t('ยังไม่มีรายการ')))
         ]);
         if (finance && !finance.error) {
-          var monthData = {};
-          for (var m = 1; m <= 12; m++) monthData[year + '-' + ('0' + m).slice(-2)] = { income: 0, expense: 0 };
-          finance.records.items.forEach(function (r) { var k = String(r.receivedDate || '').slice(0, 7); if (monthData[k]) monthData[k].income += Number(r.receivedAmount) || 0; });
-          finance.expenses.items.forEach(function (e) { var k = String(e.date || '').slice(0, 7); if (monthData[k]) monthData[k].expense += Number(e.amount) || 0; });
-          var months = Object.keys(monthData).sort().reverse();
-          var summaryTable = el('div', { style: 'overflow-x:auto' }, el('table', { class: 'doc-table' },
-            el('thead', null, el('tr', null, el('th', null, _t('เดือน')), el('th', { class: 'num' }, _t('รายรับที่ได้รับ')), el('th', { class: 'num' }, _t('รายจ่าย')), el('th', { class: 'num' }, _t('คงเหลือ')))),
-            el('tbody', null, months.map(function (key) { var x = monthData[key]; return el('tr', null, el('td', null, key), el('td', { class: 'num' }, money(x.income)), el('td', { class: 'num' }, money(x.expense)), el('td', { class: 'num' }, money(x.income - x.expense))); }))));
-          append(out, el('div', { class: 'card' }, el('h3', null, _t('สรุปรายรับและรายจ่ายรายเดือน') + ' · ' + year),
-            el('div', { class: 'small muted' }, _t('รายรับจากยอดเงินที่บันทึกในเมนูการเงิน · รายจ่ายจากรายการที่บันทึกใน Supabase')),
+          var annual = makeMonthTotals(year, finance.records.items, finance.expenses.items);
+          function moneyKpi(value, label, color) { return el('div', { class: 'kpi' }, el('div', { class: 'v', style: color ? 'color:' + color : '' }, money(value)), el('div', { class: 'k' }, label)); }
+          append(out, el('div', { class: 'card' }, el('h3', null, _t('สรุปรายปี') + ' · ' + year),
+            el('div', { class: 'kpis' },
+              moneyKpi(annual.total.income, _t('รวมรายรับ')),
+              moneyKpi(annual.total.expense, _t('รวมรายจ่าย'), 'var(--danger)'),
+              moneyKpi(annual.total.income - annual.total.expense, _t('คงเหลือสุทธิ'))),
+            el('div', { class: 'small muted' }, _t('รายรับนับจากยอดเงินที่ได้รับจริง ส่วนรายจ่ายนับจากรายการค่าใช้จ่ายที่บันทึกไว้')),
             finance.records.truncated ? el('div', { class: 'banner warn' }, icon('alert'), el('div', null, _t('รายรับมีเกิน 500 รายการ แสดงยอดไม่ครบ กรุณาจำกัดช่วงรายงานก่อนสรุป'))) : null,
-            summaryTable));
+            el('button', { class: 'btn btn-outline btn-block', onclick: function () { go(viewAnnualSummary, { year: year }); } }, icon('chart'), _t('ดูรายเดือนทั้งปี'))));
         } else if (finance && finance.error) {
           append(out, el('div', { class: 'banner warn' }, icon('alert'), el('div', null, _t('โหลดสรุปรายเดือนหรือรายการค่าใช้จ่ายไม่ได้: ') + finance.error.message)));
         }
       }).catch(function (e) { clear(out); append(out, el('div', { class: 'banner error' }, icon('alert'), el('div', null, e.message))); });
     }
-    page(app, 'Dashboard', out, null, el('button', { class: 'icon-btn', 'aria-label': _t('รีเฟรช'), onclick: load }, icon('refresh')));
+    page(app, _t('แดชบอร์ด'), out, null, el('button', { class: 'icon-btn', 'aria-label': _t('รีเฟรช'), onclick: load }, icon('refresh')));
     load();
+  }
+
+  function viewAnnualSummary(app, st) {
+    st = st || {};
+    var year = el('input', { class: 'input', type: 'number', min: 2000, max: 2100, step: 1, value: st.year || todayStr(0).slice(0, 4) });
+    var out = el('div', { style: 'display:flex;flex-direction:column;gap:12px' });
+    var err = el('div', { class: 'err-text' });
+    function load() {
+      var y = String(year.value || '').trim();
+      if (!/^\d{4}$/.test(y) || Number(y) < 2000 || Number(y) > 2100) { err.textContent = _t('กรุณาระบุปี ค.ศ. 4 หลัก'); return; }
+      err.textContent = ''; clear(out); append(out, loadingBox());
+      var dateFrom = y + '-01-01', dateTo = y + '-12-31';
+      Promise.all([
+        Api.read('finance.records', { dateFrom: dateFrom, dateTo: dateTo, limit: 500 }),
+        supabaseAction('finance.expenses.list', { dateFrom: dateFrom, dateTo: dateTo })
+      ]).then(function (res) {
+        var annual = makeMonthTotals(y, res[0].items, res[1].items);
+        clear(out);
+        var monthRows = Object.keys(annual.byMonth).sort().map(function (key) {
+          var m = annual.byMonth[key];
+          return el('tr', null, el('td', null, monthLabel(key)), el('td', { class: 'num' }, money(m.income)),
+            el('td', { class: 'num' }, money(m.expense)), el('td', { class: 'num' }, money(m.income - m.expense)));
+        });
+        monthRows.push(el('tr', { style: 'font-weight:700;border-top:2px solid var(--line)' },
+          el('td', null, _t('รวมทั้งปี')), el('td', { class: 'num' }, money(annual.total.income)),
+          el('td', { class: 'num' }, money(annual.total.expense)), el('td', { class: 'num' }, money(annual.total.income - annual.total.expense))));
+        var monthlyTable = el('div', { style: 'overflow-x:auto' }, el('table', { class: 'doc-table' },
+          el('thead', null, el('tr', null, el('th', null, _t('เดือน')), el('th', { class: 'num' }, _t('รายรับ')),
+            el('th', { class: 'num' }, _t('รายจ่าย')), el('th', { class: 'num' }, _t('คงเหลือสุทธิ')))),
+          el('tbody', null, monthRows)));
+        append(out, [
+          el('div', { class: 'kpis' },
+            el('div', { class: 'kpi' }, el('div', { class: 'v' }, money(annual.total.income)), el('div', { class: 'k' }, _t('รวมรายรับ (บาท)'))),
+            el('div', { class: 'kpi' }, el('div', { class: 'v', style: 'color:var(--danger)' }, money(annual.total.expense)), el('div', { class: 'k' }, _t('รวมรายจ่าย (บาท)'))),
+            el('div', { class: 'kpi' }, el('div', { class: 'v' }, money(annual.total.income - annual.total.expense)), el('div', { class: 'k' }, _t('คงเหลือสุทธิ (บาท)')))),
+          el('div', { class: 'card' },
+            el('div', { class: 'small muted' }, _t('รายรับนับจากยอดเงินที่ได้รับจริง ส่วนรายจ่ายนับจากรายการค่าใช้จ่ายที่บันทึกไว้')),
+            res[0].truncated ? el('div', { class: 'banner warn', style: 'margin-top:10px' }, icon('alert'), el('div', null, _t('รายรับมีเกิน 500 รายการ แสดงยอดไม่ครบ กรุณาจำกัดช่วงรายงานก่อนสรุป'))) : null,
+            monthlyTable)
+        ]);
+      }).catch(function (e) { clear(out); append(out, errorBox(e)); });
+    }
+    page(app, _t('สรุปรายปี'), [
+      el('div', { class: 'card', style: 'display:flex;flex-direction:column;gap:10px' },
+        el('div', { class: 'field' }, el('label', null, _t('เลือกปี')), year), err,
+        el('button', { class: 'btn btn-primary btn-block', onclick: load }, icon('search'), _t('ดูสรุป'))),
+      out
+    ], null, el('button', { class: 'icon-btn', 'aria-label': _t('รีเฟรช'), onclick: load }, icon('refresh')));
+    load();
+  }
+
+  function monthLabel(key) {
+    var month = Number(key.slice(5, 7));
+    var names = I18N.lang === 'en' ? ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+      : I18N.lang === 'zh' ? ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月']
+      : ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
+    return names[month - 1] + ' ' + key.slice(0, 4);
   }
 
   function expenseForm() {
