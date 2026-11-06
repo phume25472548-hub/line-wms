@@ -276,8 +276,8 @@
     }
   };
 
-  /** ทดสอบ LINE ID Token กับ Supabase โดยไม่เปลี่ยน API หลักของระบบเดิม */
-  function connectSupabase() {
+  /** เรียก Supabase สำหรับงานที่ย้ายแยกเข้ามาแล้ว โดยไม่เปลี่ยน API งานคลังเดิม */
+  function supabaseAction(action, payload) {
     if (!C.SUPABASE_API_URL || !C.SUPABASE_PUBLISHABLE_KEY) {
       return Promise.reject(appErr('SUPABASE_CONFIG', _t('ยังไม่ได้ตั้งค่า Supabase')));
     }
@@ -286,7 +286,7 @@
     return fetch(C.SUPABASE_API_URL, {
       method: 'POST',
       headers: { apikey: C.SUPABASE_PUBLISHABLE_KEY },
-      body: JSON.stringify({ action: 'bootstrap', idToken: Auth.token(), payload: {} }),
+      body: JSON.stringify({ action: action, idToken: Auth.token(), payload: payload || {} }),
       signal: ctl ? ctl.signal : undefined,
       cache: 'no-store'
     }).then(function (res) { return res.text(); }).then(function (raw) {
@@ -301,6 +301,9 @@
       throw appErr('SUPABASE_NETWORK', _t('เชื่อมต่อ Supabase ไม่สำเร็จ'), null, { network: true });
     });
   }
+
+  /** ทดสอบการยืนยัน LINE กับ Supabase */
+  function connectSupabase() { return supabaseAction('bootstrap', {}).then(function (d) { return d; }); }
 
   /** รายการที่กำลังบันทึก — เก็บไว้ในเครื่องจนกว่าจะรู้ผลแน่ชัด */
   var Pending = {
@@ -1406,23 +1409,66 @@
   /* ================================================================ */
   function viewDashboard(app) {
     var out = el('div', { style: 'display:flex;flex-direction:column;gap:14px' });
+    var from = el('input', { class: 'input', type: 'date', value: todayStr(6) });
+    var to = el('input', { class: 'input', type: 'date', value: todayStr(0) });
+    var chartType = el('select', { class: 'input' },
+      el('option', { value: 'bar' }, _t('กราฟแท่ง')),
+      el('option', { value: 'pie' }, _t('กราฟวงกลม')));
+    var rangeError = el('div', { class: 'err-text' });
     function load() {
+      if (!from.value || !to.value || from.value > to.value) {
+        rangeError.textContent = _t('กรุณาเลือกช่วงวันที่ให้ถูกต้อง');
+        return;
+      }
+      rangeError.textContent = '';
       clear(out); append(out, el('div', { class: 'empty' }, el('div', { class: 'spinner', style: 'margin:0 auto' })));
-      Api.read('dashboard', {}).then(function (d) {
+      var year = todayStr(0).slice(0, 4);
+      var financePromise = State.user && State.user.role === 'ADMIN'
+        ? Promise.all([
+          Api.read('finance.records', { dateFrom: year + '-01-01', dateTo: year + '-12-31', limit: 500 }),
+          supabaseAction('finance.expenses.list', { dateFrom: year + '-01-01', dateTo: year + '-12-31' })
+        ]).then(function (x) { return { records: x[0], expenses: x[1] }; }).catch(function (e) { return { error: e }; })
+        : Promise.resolve(null);
+      Promise.all([
+        Api.read('dashboard', { dateFrom: from.value, dateTo: to.value }),
+        Api.read('history.search', { dateFrom: from.value, dateTo: to.value, limit: 500 }),
+        financePromise
+      ]).then(function (result) {
+        var d = result[0], h = result[1], finance = result[2];
         clear(out);
         var t = d.todayStats, tot = d.totals;
         function kpi(v, k, c) { return el('div', { class: 'kpi' }, el('div', { class: 'v', style: c ? 'color:' + c : '' }, fmt(v)), el('div', { class: 'k' }, k)); }
-        var maxQ = Math.max.apply(null, d.byChannel.map(function (c) { return c.qty7d; }).concat([1]));
+        var typeNames = { IN: _t('รับเข้า'), OUT: _t('ขายออก'), RETURN: _t('รับคืน'), SUPPLIER_RETURN: _t('ส่งคืนซัพพลายเออร์'), WRITE_OFF: _t('ตัดเสีย'), ADJUST: _t('ปรับยอด'), TRANSFER: _t('ย้ายสถานะ'), CANCEL: _t('ยกเลิกออเดอร์') };
+        var chartColors = ['#247c67', '#e27153', '#5492c5', '#d7a647', '#9167b7', '#6b7b8c', '#35a1a0', '#cf6b9d'];
+        var grouped = {};
+        h.items.forEach(function (x) { var k = x.type || 'OTHER'; grouped[k] = (grouped[k] || 0) + Math.abs(Number(x.qty) || 0); });
+        var chartItems = Object.keys(grouped).map(function (k) { return { key: k, name: typeNames[k] || k, value: grouped[k] }; }).sort(function (a, b) { return b.value - a.value; });
+        var maxQ = Math.max.apply(null, chartItems.map(function (x) { return x.value; }).concat([1]));
+        var totalQ = chartItems.reduce(function (s, x) { return s + x.value; }, 0);
+        var chartBody;
+        if (!chartItems.length) chartBody = el('div', { class: 'empty' }, _t('ไม่มีความเคลื่อนไหวในช่วงวันที่เลือก'));
+        else if (chartType.value === 'pie') {
+          var cursor = 0, slices = [];
+          chartItems.forEach(function (x, i) { var start = cursor; cursor += x.value / totalQ * 100; slices.push(chartColors[i % chartColors.length] + ' ' + start.toFixed(2) + '% ' + cursor.toFixed(2) + '%'); });
+          chartBody = el('div', { style: 'display:flex;align-items:center;gap:18px;flex-wrap:wrap;padding:10px 0' },
+            el('div', { role: 'img', 'aria-label': _t('สัดส่วนความเคลื่อนไหว'), style: 'width:156px;height:156px;flex:0 0 156px;border-radius:50%;background:conic-gradient(' + slices.join(',') + ')' }),
+            el('div', { style: 'display:flex;flex-direction:column;gap:7px' }, chartItems.map(function (x, i) { return el('div', { class: 'row small' }, el('i', { style: 'width:10px;height:10px;border-radius:50%;background:' + chartColors[i % chartColors.length] }), el('span', { class: 'grow' }, x.name), el('b', null, fmt(x.value)), el('span', { class: 'muted' }, (x.value / totalQ * 100).toFixed(1) + '%')); })));
+        } else {
+          chartBody = chartItems.map(function (x, i) { return el('div', { style: 'display:grid;grid-template-columns:minmax(90px,1fr) 3fr auto;align-items:center;gap:8px;margin:8px 0' },
+            el('span', { class: 'small' }, x.name), el('span', { style: 'height:12px;background:var(--line);border-radius:8px;overflow:hidden' }, el('i', { style: 'display:block;height:100%;width:' + Math.max(2, Math.round(x.value / maxQ * 100)) + '%;background:' + chartColors[i % chartColors.length] })), el('b', { class: 'small right' }, fmt(x.value))); });
+        }
         append(out, [
+          el('div', { class: 'card', style: 'display:flex;flex-direction:column;gap:10px' },
+            el('div', { class: 'section-title', style: 'margin:0' }, _t('เลือกช่วงเวลาและรูปแบบกราฟ')),
+            el('div', { class: 'row' }, el('div', { class: 'field grow' }, el('label', null, _t('ตั้งแต่')), from), el('div', { class: 'field grow' }, el('label', null, _t('ถึง')), to)),
+            el('div', { class: 'row' }, el('div', { class: 'field grow' }, el('label', null, _t('รูปแบบกราฟ')), chartType), el('button', { class: 'btn btn-primary', onclick: load }, icon('search'), _t('แสดงผล'))), rangeError,
+            State.user && State.user.role === 'ADMIN' ? el('button', { class: 'btn btn-outline btn-block', onclick: function () { expenseForm().then(function (saved) { if (saved) load(); }); } }, icon('plus'), _t('เพิ่มค่าใช้จ่าย')) : null),
           el('div', { class: 'section-title' }, _t('ภาพรวมสต๊อก')),
           el('div', { class: 'kpis' }, kpi(tot.skuCount, _t('SKU ที่ใช้งาน')), kpi(tot.available, _t('สินค้าพร้อมขาย'), 'var(--brand-dark)'), kpi(tot.inspection, _t('สินค้ารอตรวจสอบ'), 'var(--warn)'), kpi(d.lowStockCount, _t('SKU ใกล้หมด'), d.lowStockCount ? 'var(--danger)' : '')),
           el('div', { class: 'section-title' }, _t('วันนี้ ') + d.today),
           el('div', { class: 'kpis' }, kpi(t.ordersToday, _t('ออเดอร์', 'kpi')), kpi(t.soldToday, _t('ชิ้นที่ขายออก')), kpi(t.inToday, _t('ชิ้นที่รับเข้า')), kpi(t.returnToday, _t('ชิ้นที่รับคืน')), kpi(t.writeOffToday, _t('ชิ้นที่ตัดเสีย')), kpi(t.cancelToday, _t('ชิ้นคืนจากยกเลิก'))),
-          el('div', { class: 'card' }, el('h3', null, _t('ขายออกแยกช่องทาง (7 วัน)')),
-            d.byChannel.filter(function (c) { return c.orders7d; }).length ? d.byChannel.filter(function (c) { return c.orders7d; }).map(function (c) {
-              return el('div', null, el('div', { class: 'bar-row' }, el('div', null, c.name), el('div', { class: 'bar' }, el('i', { style: 'width:' + Math.round(c.qty7d / maxQ * 100) + '%' })), el('div', { class: 'right' }, fmt(c.qty7d))),
-                el('div', { class: 'small muted', style: 'margin:-6px 0 6px' }, _t('วันนี้ ') + c.ordersToday + _t(' ออเดอร์ / ') + fmt(c.qtyToday) + _t(' ชิ้น · 7 วัน ') + c.orders7d + _t(' ออเดอร์')));
-            }) : el('div', { class: 'empty' }, _t('ยังไม่มียอดขายใน 7 วัน'))),
+          el('div', { class: 'card' }, el('h3', null, _t('ความเคลื่อนไหวตามประเภท')), el('div', { class: 'small muted' }, from.value + ' — ' + to.value + (h.truncated ? _t(' · แสดงรายการล่าสุด 500 รายการ') : '')), chartBody,
+            el('div', { class: 'small muted' }, _t('กราฟนับจำนวนชิ้นแบบค่าสัมบูรณ์ตามประเภทธุรกรรม'))),
           el('div', { class: 'card' }, el('h3', null, _t('สินค้าใกล้หมด')),
             d.lowStock.length ? d.lowStock.map(function (l) {
               return el('button', { class: 'row', style: 'width:100%;border:0;background:none;padding:8px 0;border-bottom:1px solid var(--line);text-align:left;cursor:pointer', onclick: function () { go(viewCheck, { sku: l.sku }); } },
@@ -1431,10 +1477,65 @@
             }) : el('div', { class: 'empty' }, _t('ไม่มีสินค้าใกล้หมด'))),
           el('div', { class: 'card' }, el('h3', null, _t('ความเคลื่อนไหวล่าสุด')), d.recent.length ? d.recent.map(txRow) : el('div', { class: 'empty' }, _t('ยังไม่มีรายการ')))
         ]);
+        if (finance && !finance.error) {
+          var monthData = {};
+          for (var m = 1; m <= 12; m++) monthData[year + '-' + ('0' + m).slice(-2)] = { income: 0, expense: 0 };
+          finance.records.items.forEach(function (r) { var k = String(r.receivedDate || '').slice(0, 7); if (monthData[k]) monthData[k].income += Number(r.receivedAmount) || 0; });
+          finance.expenses.items.forEach(function (e) { var k = String(e.date || '').slice(0, 7); if (monthData[k]) monthData[k].expense += Number(e.amount) || 0; });
+          var months = Object.keys(monthData).sort().reverse();
+          var summaryTable = el('div', { style: 'overflow-x:auto' }, el('table', { class: 'doc-table' },
+            el('thead', null, el('tr', null, el('th', null, _t('เดือน')), el('th', { class: 'num' }, _t('รายรับที่ได้รับ')), el('th', { class: 'num' }, _t('รายจ่าย')), el('th', { class: 'num' }, _t('คงเหลือ')))),
+            el('tbody', null, months.map(function (key) { var x = monthData[key]; return el('tr', null, el('td', null, key), el('td', { class: 'num' }, money(x.income)), el('td', { class: 'num' }, money(x.expense)), el('td', { class: 'num' }, money(x.income - x.expense))); }))));
+          append(out, el('div', { class: 'card' }, el('h3', null, _t('สรุปรายรับและรายจ่ายรายเดือน') + ' · ' + year),
+            el('div', { class: 'small muted' }, _t('รายรับจากยอดเงินที่บันทึกในเมนูการเงิน · รายจ่ายจากรายการที่บันทึกใน Supabase')),
+            finance.records.truncated ? el('div', { class: 'banner warn' }, icon('alert'), el('div', null, _t('รายรับมีเกิน 500 รายการ แสดงยอดไม่ครบ กรุณาจำกัดช่วงรายงานก่อนสรุป'))) : null,
+            summaryTable));
+        } else if (finance && finance.error) {
+          append(out, el('div', { class: 'banner warn' }, icon('alert'), el('div', null, _t('โหลดสรุปรายเดือนหรือรายการค่าใช้จ่ายไม่ได้: ') + finance.error.message)));
+        }
       }).catch(function (e) { clear(out); append(out, el('div', { class: 'banner error' }, icon('alert'), el('div', null, e.message))); });
     }
     page(app, 'Dashboard', out, null, el('button', { class: 'icon-btn', 'aria-label': _t('รีเฟรช'), onclick: load }, icon('refresh')));
     load();
+  }
+
+  function expenseForm() {
+    return sheet(function (close) {
+      var date = el('input', { class: 'input', type: 'date', value: todayStr(0) });
+      var category = el('select', { class: 'input' },
+        el('option', { value: 'สินค้าและต้นทุน' }, _t('สินค้าและต้นทุน')),
+        el('option', { value: 'ขนส่ง' }, _t('ขนส่ง')),
+        el('option', { value: 'ค่าเช่า' }, _t('ค่าเช่า')),
+        el('option', { value: 'สาธารณูปโภค' }, _t('สาธารณูปโภค')),
+        el('option', { value: 'ค่าจ้าง' }, _t('ค่าจ้าง')),
+        el('option', { value: 'การตลาด' }, _t('การตลาด')),
+        el('option', { value: 'อื่นๆ' }, _t('อื่นๆ')));
+      var description = el('input', { class: 'input', maxLength: 240, placeholder: _t('รายละเอียดค่าใช้จ่าย') });
+      var amount = moneyInput('', '0.00');
+      var payment = el('select', { class: 'input' }, el('option', { value: 'TRANSFER' }, _t('โอนเงิน')), el('option', { value: 'CASH' }, _t('เงินสด')), el('option', { value: 'OTHER' }, _t('อื่นๆ')));
+      var vendor = el('input', { class: 'input', maxLength: 120, placeholder: _t('ร้านค้า / ผู้รับเงิน (ถ้ามี)') });
+      var note = el('textarea', { class: 'input', maxLength: 500, rows: 2, placeholder: _t('หมายเหตุ (ถ้ามี)') });
+      var err = el('div', { class: 'err-text' });
+      var save = el('button', { class: 'btn btn-primary btn-block btn-lg' }, _t('บันทึกค่าใช้จ่าย'));
+      save.addEventListener('click', function () {
+        var value = parseMoney(amount.value);
+        if (!date.value || !description.value.trim() || value == null || value <= 0) {
+          err.textContent = _t('กรุณากรอกวันที่ รายละเอียด และจำนวนเงินให้ถูกต้อง'); return;
+        }
+        save.disabled = true; err.textContent = '';
+        supabaseAction('finance.expenses.save', { id: uuid(), date: date.value, category: category.value, description: description.value.trim(), amount: value, paymentMethod: payment.value, vendor: vendor.value.trim(), note: note.value.trim() })
+          .then(function (d) { toast(I18N.srv(d.message, 'บันทึกเรียบร้อย'), 'ok'); close(true); })
+          .catch(function (e) { save.disabled = false; err.textContent = e.message; });
+      });
+      return [el('h2', null, _t('เพิ่มค่าใช้จ่าย')), el('div', { class: 'field' }, el('label', null, _t('วันที่')), date),
+        el('div', { class: 'field' }, el('label', null, _t('หมวดหมู่')), category),
+        el('div', { class: 'field' }, el('label', null, _t('รายละเอียด')), description),
+        el('div', { class: 'field' }, el('label', null, _t('จำนวนเงิน (บาท)')), amount),
+        el('div', { class: 'field' }, el('label', null, _t('วิธีชำระ')), payment),
+        el('div', { class: 'field' }, el('label', null, _t('ร้านค้า / ผู้รับเงิน')), vendor),
+        el('div', { class: 'field' }, el('label', null, _t('หมายเหตุ')), note), err, save,
+        el('button', { class: 'btn btn-outline btn-block', onclick: function () { close(false); } }, _t('ยกเลิก'))];
+    });
   }
 
   /* ================================================================ */
