@@ -372,6 +372,32 @@ textarea.input { min-height: 80px; resize: vertical; }
 .doc-table th { text-align: left; font-weight: 600; font-size: .9em; padding: 5px 6px; border-top: 1px solid #000; border-bottom: 1px solid #000; background: #f2f2f2; }
 .doc-table td { padding: 5px 6px; border-bottom: 1px solid #d4d4d4; vertical-align: top; }
 .doc-table .num { text-align: right; white-space: nowrap; }
+.annual-report-heading { display: flex; flex-direction: column; gap: 2px; }
+.annual-report-heading h2 { margin: 0; font-size: 21px; }
+.annual-report-actions { align-items: flex-start; }
+.annual-report-actions .btn { flex: none; }
+.annual-section h3 { margin-bottom: 10px; }
+.annual-table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.annual-report-table { min-width: 640px; }
+.annual-report-table th { color: #111827 !important; background: #E5E7EB !important; border-color: #9CA3AF; }
+.annual-report-table td { border-color: #D1D5DB; }
+.annual-total-row { font-weight: 700; border-top: 2px solid #6B7280; }
+.annual-print { color: #111827; background: #fff; }
+.annual-print .muted { color: #4B5563 !important; }
+.annual-print .annual-report-heading { margin-bottom: 8px; }
+.annual-print .annual-section { color: #111827; background: #fff; box-shadow: none; border: 1px solid #D1D5DB; border-radius: 0; margin-top: 8px; padding: 8px; }
+.annual-print .annual-section h3 { color: #111827; font-size: 12pt; }
+.annual-print .annual-report-table { min-width: 0; font-size: 8.5pt; }
+.annual-print .annual-report-table td { color: #111827; }
+.annual-print .annual-report-table th { white-space: normal; }
+.annual-print .annual-table-scroll { overflow: visible; }
+.annual-print .annual-kpis { grid-template-columns: repeat(3, 1fr); }
+.annual-print .annual-kpis .kpi { background: #F3F4F6; box-shadow: none; padding: 6px; }
+.annual-print .annual-kpis .v { font-size: 13pt; }
+.annual-print .annual-kpis .k { color: #374151; font-size: 8pt; }
+.annual-print .annual-section { break-inside: auto; }
+.annual-print .annual-section h3 { break-after: avoid; }
+.annual-print .annual-report-table tr { break-inside: avoid; }
 .doc-table .c-no { width: 2.6em; text-align: center; }
 .doc-table .c-check { width: 3em; text-align: center; }
 .doc-sku, .doc-sku-col { font-size: .82em; color: #555; }
