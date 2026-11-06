@@ -1411,11 +1411,21 @@
   /* ================================================================ */
   function makeMonthTotals(year, records, expenses) {
     var byMonth = {};
-    for (var m = 1; m <= 12; m++) byMonth[year + '-' + ('0' + m).slice(-2)] = { income: 0, expense: 0 };
-    (records || []).forEach(function (r) { var k = String(r.receivedDate || '').slice(0, 7); if (byMonth[k]) byMonth[k].income += Number(r.receivedAmount) || 0; });
+    for (var m = 1; m <= 12; m++) byMonth[year + '-' + ('0' + m).slice(-2)] = { sales: 0, income: 0, fees: 0, orders: 0, expense: 0 };
+    (records || []).forEach(function (r) { var k = String(r.receivedDate || '').slice(0, 7); if (byMonth[k]) {
+      byMonth[k].sales += Number(r.salePrice) || 0; byMonth[k].income += Number(r.receivedAmount) || 0;
+      byMonth[k].fees += Number(r.feeAmount) || 0; byMonth[k].orders++;
+    } });
     (expenses || []).forEach(function (e) { var k = String(e.date || '').slice(0, 7); if (byMonth[k]) byMonth[k].expense += Number(e.amount) || 0; });
-    var total = Object.keys(byMonth).reduce(function (s, k) { s.income += byMonth[k].income; s.expense += byMonth[k].expense; return s; }, { income: 0, expense: 0 });
-    return { byMonth: byMonth, total: total };
+    var total = Object.keys(byMonth).reduce(function (s, k) { ['sales', 'income', 'fees', 'orders', 'expense'].forEach(function (x) { s[x] += byMonth[k][x]; }); return s; }, { sales: 0, income: 0, fees: 0, orders: 0, expense: 0 });
+    var byChannel = {}, byCategory = {};
+    (records || []).forEach(function (r) { var key = r.channelName || r.channelId || _t('ไม่ระบุช่องทาง'); if (!byChannel[key]) byChannel[key] = { orders: 0, sales: 0, income: 0, fees: 0 };
+      byChannel[key].orders++; byChannel[key].sales += Number(r.salePrice) || 0; byChannel[key].income += Number(r.receivedAmount) || 0; byChannel[key].fees += Number(r.feeAmount) || 0;
+    });
+    (expenses || []).forEach(function (e) { var key = e.category || _t('ไม่ระบุหมวดหมู่'); if (!byCategory[key]) byCategory[key] = { count: 0, amount: 0 };
+      byCategory[key].count++; byCategory[key].amount += Number(e.amount) || 0;
+    });
+    return { byMonth: byMonth, total: total, byChannel: byChannel, byCategory: byCategory };
   }
 
   function viewDashboard(app) {
@@ -1524,27 +1534,59 @@
       ]).then(function (res) {
         var annual = makeMonthTotals(y, res[0].items, res[1].items);
         clear(out);
-        var monthRows = Object.keys(annual.byMonth).sort().map(function (key) {
+        function reportTable(headers, rows) {
+          return el('div', { class: 'annual-table-scroll' }, el('table', { class: 'doc-table annual-report-table' },
+            el('thead', null, el('tr', null, headers.map(function (h, i) { return el('th', { class: i ? 'num' : '' }, h); }))),
+            el('tbody', null, rows)));
+        }
+        function totalRow(label, values) {
+          return el('tr', { class: 'annual-total-row' }, [el('td', null, label)].concat(values.map(function (v) { return el('td', { class: 'num' }, v); })));
+        }
+        var months = Object.keys(annual.byMonth).sort().map(function (key) {
           var m = annual.byMonth[key];
-          return el('tr', null, el('td', null, monthLabel(key)), el('td', { class: 'num' }, money(m.income)),
-            el('td', { class: 'num' }, money(m.expense)), el('td', { class: 'num' }, money(m.income - m.expense)));
+          return el('tr', null, el('td', null, monthLabel(key)), el('td', { class: 'num' }, fmt(m.orders)),
+            el('td', { class: 'num' }, money(m.sales)), el('td', { class: 'num' }, money(m.income)),
+            el('td', { class: 'num' }, money(m.fees)), el('td', { class: 'num' }, money(m.expense)),
+            el('td', { class: 'num' }, money(m.income - m.expense)));
         });
-        monthRows.push(el('tr', { style: 'font-weight:700;border-top:2px solid var(--line)' },
-          el('td', null, _t('รวมทั้งปี')), el('td', { class: 'num' }, money(annual.total.income)),
-          el('td', { class: 'num' }, money(annual.total.expense)), el('td', { class: 'num' }, money(annual.total.income - annual.total.expense))));
-        var monthlyTable = el('div', { style: 'overflow-x:auto' }, el('table', { class: 'doc-table' },
-          el('thead', null, el('tr', null, el('th', null, _t('เดือน')), el('th', { class: 'num' }, _t('รายรับ')),
-            el('th', { class: 'num' }, _t('รายจ่าย')), el('th', { class: 'num' }, _t('คงเหลือสุทธิ')))),
-          el('tbody', null, monthRows)));
+        months.push(totalRow(_t('รวมทั้งปี'), [fmt(annual.total.orders), money(annual.total.sales), money(annual.total.income), money(annual.total.fees), money(annual.total.expense), money(annual.total.income - annual.total.expense)]));
+        var channelRows = Object.keys(annual.byChannel).sort(function (a, b) { return annual.byChannel[b].income - annual.byChannel[a].income; }).map(function (key) {
+          var c = annual.byChannel[key]; return el('tr', null, el('td', null, key), el('td', { class: 'num' }, fmt(c.orders)), el('td', { class: 'num' }, money(c.sales)), el('td', { class: 'num' }, money(c.fees)), el('td', { class: 'num' }, money(c.income)));
+        });
+        channelRows.push(totalRow(_t('รวมรายรับ'), [fmt(annual.total.orders), money(annual.total.sales), money(annual.total.fees), money(annual.total.income)]));
+        var categoryRows = Object.keys(annual.byCategory).sort(function (a, b) { return annual.byCategory[b].amount - annual.byCategory[a].amount; }).map(function (key) {
+          var c = annual.byCategory[key]; return el('tr', null, el('td', null, _t(key)), el('td', { class: 'num' }, fmt(c.count)), el('td', { class: 'num' }, money(c.amount)));
+        });
+        categoryRows.push(totalRow(_t('รวมรายจ่าย'), [fmt(res[1].items.length), money(annual.total.expense)]));
+        var expenseRows = res[1].items.slice().sort(function (a, b) { return String(a.date).localeCompare(String(b.date)); }).map(function (e) {
+          return el('tr', null, el('td', null, e.date || '—'), el('td', null, _t(e.category || 'ไม่ระบุหมวดหมู่')),
+            el('td', null, [e.description || '—', e.vendor || ''].filter(Boolean).join(' · ')), el('td', { class: 'num' }, money(e.amount)));
+        });
+        if (!expenseRows.length) expenseRows.push(el('tr', null, el('td', { colspan: 4 }, _t('ยังไม่มีรายการค่าใช้จ่ายในปีนี้'))));
+        function sections() { return [
+          el('div', { class: 'card annual-section' }, el('h3', null, _t('ยอดรายเดือน')), reportTable([_t('เดือน'), _t('จำนวนออเดอร์'), _t('ยอดขายรวม'), _t('ยอดรับจริง'), _t('ค่าธรรมเนียม'), _t('รายจ่าย'), _t('คงเหลือหลังรายจ่าย')], months)),
+          el('div', { class: 'card annual-section' }, el('h3', null, _t('รายรับแยกตามช่องทาง')), reportTable([_t('ช่องทางขาย'), _t('จำนวนออเดอร์'), _t('ยอดขายรวม'), _t('ค่าธรรมเนียม'), _t('ยอดรับจริง')], channelRows)),
+          el('div', { class: 'card annual-section' }, el('h3', null, _t('รายจ่ายแยกตามหมวด')), reportTable([_t('หมวดหมู่'), _t('จำนวนรายการ'), _t('ยอดรวม')], categoryRows)),
+          el('div', { class: 'card annual-section' }, el('h3', null, _t('รายละเอียดรายการจ่าย')), reportTable([_t('วันที่'), _t('หมวดหมู่'), _t('รายละเอียด / ผู้รับเงิน'), _t('จำนวนเงิน (บาท)')], expenseRows))
+        ]; }
+        var net = annual.total.income - annual.total.expense;
+        var reportTitle = el('div', { class: 'annual-report-heading' }, el('h2', null, _t('รายงานการเงินประจำปี') + ' ' + y), el('div', { class: 'small muted' }, _t('ช่วงรายงาน') + ': ' + monthLabel(y + '-01') + ' – ' + monthLabel(y + '-12')));
+        function summaryCards() { return el('div', { class: 'kpis annual-kpis' },
+          el('div', { class: 'kpi' }, el('div', { class: 'v' }, money(annual.total.sales)), el('div', { class: 'k' }, _t('ยอดขายรวม (บาท)'))),
+          el('div', { class: 'kpi' }, el('div', { class: 'v' }, money(annual.total.income)), el('div', { class: 'k' }, _t('ยอดรับจริง (บาท)'))),
+          el('div', { class: 'kpi' }, el('div', { class: 'v' }, money(annual.total.fees)), el('div', { class: 'k' }, _t('ค่าธรรมเนียมรวม (บาท)'))),
+          el('div', { class: 'kpi' }, el('div', { class: 'v', style: 'color:var(--danger)' }, money(annual.total.expense)), el('div', { class: 'k' }, _t('รายจ่ายรวม (บาท)'))),
+          el('div', { class: 'kpi' }, el('div', { class: 'v' }, money(net)), el('div', { class: 'k' }, _t('เงินรับหลังหักรายจ่ายที่บันทึก (บาท)')))); }
+        var basis = _t('ยอดขายรวมมาจากราคาขายที่บันทึก ยอดรับจริงมาจากบันทึกการเงิน ค่าธรรมเนียมแสดงแยก และยอดสุทธิหักเฉพาะรายจ่ายที่บันทึกในระบบ ไม่ใช่กำไรทางบัญชี');
         append(out, [
-          el('div', { class: 'kpis' },
-            el('div', { class: 'kpi' }, el('div', { class: 'v' }, money(annual.total.income)), el('div', { class: 'k' }, _t('รวมรายรับ (บาท)'))),
-            el('div', { class: 'kpi' }, el('div', { class: 'v', style: 'color:var(--danger)' }, money(annual.total.expense)), el('div', { class: 'k' }, _t('รวมรายจ่าย (บาท)'))),
-            el('div', { class: 'kpi' }, el('div', { class: 'v' }, money(annual.total.income - annual.total.expense)), el('div', { class: 'k' }, _t('คงเหลือสุทธิ (บาท)')))),
-          el('div', { class: 'card' },
-            el('div', { class: 'small muted' }, _t('รายรับนับจากยอดเงินที่ได้รับจริง ส่วนรายจ่ายนับจากรายการค่าใช้จ่ายที่บันทึกไว้')),
-            res[0].truncated ? el('div', { class: 'banner warn', style: 'margin-top:10px' }, icon('alert'), el('div', null, _t('รายรับมีเกิน 500 รายการ แสดงยอดไม่ครบ กรุณาจำกัดช่วงรายงานก่อนสรุป'))) : null,
-            monthlyTable)
+          reportTitle,
+          el('div', { class: 'row annual-report-actions' }, el('div', { class: 'small muted grow' }, basis),
+            el('button', { class: 'btn btn-outline', onclick: function () {
+              printDocNode(el('div', { class: 'doc annual-print' }, reportTitle.cloneNode(true), summaryCards(), el('p', { class: 'small' }, basis),
+                res[0].truncated ? el('p', { class: 'small' }, _t('รายรับมีเกิน 500 รายการ แสดงยอดไม่ครบ กรุณาจำกัดช่วงรายงานก่อนสรุป')) : null, sections()), _t('รายงานประจำปี') + ' ' + y);
+            } }, icon('doc'), _t('พิมพ์ / บันทึก PDF'))),
+          res[0].truncated ? el('div', { class: 'banner warn' }, icon('alert'), el('div', null, _t('รายรับมีเกิน 500 รายการ แสดงยอดไม่ครบ กรุณาจำกัดช่วงรายงานก่อนสรุป'))) : null,
+          summaryCards(), sections()
         ]);
       }).catch(function (e) { clear(out); append(out, errorBox(e)); });
     }
