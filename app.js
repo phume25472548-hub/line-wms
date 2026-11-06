@@ -40,6 +40,7 @@
     refresh: '<path d="M21 12a9 9 0 11-3-6.7L21 8"/><path d="M21 3v5h-5"/>',
     home: '<path d="M3 11l9-8 9 8v9a1 1 0 01-1 1h-5v-6H9v6H4a1 1 0 01-1-1z"/>',
     coin: '<circle cx="12" cy="12" r="9"/><path d="M15 9.5c-.4-1-1.6-1.6-3-1.6-1.7 0-3 .9-3 2.1s1.3 1.8 3 2.1 3 .9 3 2.1-1.3 2.1-3 2.1c-1.4 0-2.6-.6-3-1.6M12 6v2m0 8v2"/>',
+    receipt: '<path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6M9 16h3"/>',
     box: '<path d="M21 8l-9-5-9 5v8l9 5 9-5z"/><path d="M3 8l9 5 9-5M12 13v8"/>',
     chev: '<path d="M9 6l6 6-6 6"/>',
     store: '<path d="M3 9l1.5-5h15L21 9"/><path d="M3 9a3 3 0 006 0 3 3 0 006 0 3 3 0 006 0"/><path d="M5 12v8h14v-8M10 20v-5h4v5"/>',
@@ -881,6 +882,7 @@
       [can.write, _t('ยกเลิกออเดอร์'), _t('คืนสต๊อกออเดอร์'), 'xc', 'c-red', viewCancel],
       [true, _t('บิลและเอกสาร'), _t('ยอดขายวันนี้ พิมพ์ซ้ำ'), 'doc', 'c-violet', viewDocs],
       [true, 'Dashboard', _t('สรุปภาพรวม'), 'chart', 'c-blue', viewDashboard],
+      [can.admin, _t('ค่าใช้จ่าย'), _t('บันทึกและดูรายการรายจ่าย'), 'receipt', 'c-amber', viewExpenses],
       [can.admin, _t('การเงิน'), _t('ต้นทุน ยอดเงิน กำไร'), 'coin', 'c-green', viewFinance],
       [can.admin, _t('ตั้งค่าระบบ'), _t('ช่องทาง พนักงาน สินค้า'), 'gear', 'c-gray', viewAdmin]
     ];
@@ -1462,7 +1464,7 @@
             el('div', { class: 'section-title', style: 'margin:0' }, _t('เลือกช่วงเวลาและรูปแบบกราฟ')),
             el('div', { class: 'row' }, el('div', { class: 'field grow' }, el('label', null, _t('ตั้งแต่')), from), el('div', { class: 'field grow' }, el('label', null, _t('ถึง')), to)),
             el('div', { class: 'row' }, el('div', { class: 'field grow' }, el('label', null, _t('รูปแบบกราฟ')), chartType), el('button', { class: 'btn btn-primary', onclick: load }, icon('search'), _t('แสดงผล'))), rangeError,
-            State.user && State.user.role === 'ADMIN' ? el('button', { class: 'btn btn-outline btn-block', onclick: function () { expenseForm().then(function (saved) { if (saved) load(); }); } }, icon('plus'), _t('เพิ่มค่าใช้จ่าย')) : null),
+            null),
           el('div', { class: 'section-title' }, _t('ภาพรวมสต๊อก')),
           el('div', { class: 'kpis' }, kpi(tot.skuCount, _t('SKU ที่ใช้งาน')), kpi(tot.available, _t('สินค้าพร้อมขาย'), 'var(--brand-dark)'), kpi(tot.inspection, _t('สินค้ารอตรวจสอบ'), 'var(--warn)'), kpi(d.lowStockCount, _t('SKU ใกล้หมด'), d.lowStockCount ? 'var(--danger)' : '')),
           el('div', { class: 'section-title' }, _t('วันนี้ ') + d.today),
@@ -1536,6 +1538,43 @@
         el('div', { class: 'field' }, el('label', null, _t('หมายเหตุ')), note), err, save,
         el('button', { class: 'btn btn-outline btn-block', onclick: function () { close(false); } }, _t('ยกเลิก'))];
     });
+  }
+
+  function viewExpenses(app) {
+    var today = todayStr(0);
+    var from = el('input', { class: 'input', type: 'date', value: today.slice(0, 7) + '-01' });
+    var to = el('input', { class: 'input', type: 'date', value: today });
+    var out = el('div', { style: 'display:flex;flex-direction:column;gap:10px' });
+    var err = el('div', { class: 'err-text' });
+    function load() {
+      if (!from.value || !to.value || from.value > to.value) { err.textContent = _t('กรุณาเลือกช่วงวันที่ให้ถูกต้อง'); return; }
+      err.textContent = ''; clear(out); append(out, loadingBox());
+      supabaseAction('finance.expenses.list', { dateFrom: from.value, dateTo: to.value }).then(function (d) {
+        clear(out);
+        var total = d.items.reduce(function (s, x) { return s + (Number(x.amount) || 0); }, 0);
+        append(out, el('div', { class: 'kpis' },
+          el('div', { class: 'kpi' }, el('div', { class: 'v' }, money(total)), el('div', { class: 'k' }, _t('รายจ่ายในช่วงนี้ (บาท)'))),
+          el('div', { class: 'kpi' }, el('div', { class: 'v' }, fmt(d.items.length)), el('div', { class: 'k' }, _t('รายการ')))));
+        if (!d.items.length) { append(out, el('div', { class: 'card empty' }, _t('ยังไม่มีรายการค่าใช้จ่ายในช่วงนี้'))); return; }
+        append(out, d.items.map(function (x) {
+          return el('div', { class: 'list-btn', style: 'cursor:default' },
+            el('div', { class: 'ic c-amber' }, icon('receipt')),
+            el('div', { class: 'grow' }, el('div', { style: 'font-weight:600' }, x.description),
+              el('div', { class: 'small muted' }, [x.date, x.category, x.vendor].filter(Boolean).join(' · ')),
+              x.note ? el('div', { class: 'small muted' }, x.note) : null),
+            el('div', { class: 'right' }, el('b', { style: 'color:var(--danger);white-space:nowrap' }, '−' + money(x.amount)),
+              el('div', { class: 'small muted' }, x.paymentMethod === 'CASH' ? _t('เงินสด') : x.paymentMethod === 'TRANSFER' ? _t('โอนเงิน') : _t('อื่นๆ'))));
+        }));
+      }).catch(function (e) { clear(out); append(out, errorBox(e)); });
+    }
+    page(app, _t('ค่าใช้จ่าย'), [
+      el('div', { class: 'card', style: 'display:flex;flex-direction:column;gap:10px' },
+        el('div', { class: 'row' }, el('div', { class: 'field grow' }, el('label', null, _t('ตั้งแต่')), from), el('div', { class: 'field grow' }, el('label', null, _t('ถึง')), to)),
+        err, el('button', { class: 'btn btn-outline btn-block', onclick: load }, icon('search'), _t('ค้นหารายจ่าย')),
+        el('button', { class: 'btn btn-primary btn-block', onclick: function () { expenseForm().then(function (saved) { if (saved) load(); }); } }, icon('plus'), _t('เพิ่มค่าใช้จ่าย'))),
+      out
+    ], null, el('button', { class: 'icon-btn', 'aria-label': _t('รีเฟรช'), onclick: load }, icon('refresh')));
+    load();
   }
 
   /* ================================================================ */
