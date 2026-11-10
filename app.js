@@ -1665,7 +1665,7 @@
           err.textContent = _t('กรุณากรอกวันที่ รายละเอียด และจำนวนเงินให้ถูกต้อง'); return;
         }
         save.disabled = true; err.textContent = '';
-        supabaseAction('finance.expenses.save', { id: uuid(), date: date.value, category: category.value, description: description.value.trim(), amount: value, paymentMethod: payment.value, vendor: vendor.value.trim(), note: note.value.trim() })
+        submitWrite('finance.expenses.save', { id: uuid(), date: date.value, category: category.value, description: description.value.trim(), amount: value, paymentMethod: payment.value, vendor: vendor.value.trim(), note: note.value.trim() }, _t('บันทึกค่าใช้จ่าย ') + description.value.trim())
           .then(function (d) { toast(I18N.srv(d.message, 'บันทึกเรียบร้อย'), 'ok'); close(true); })
           .catch(function (e) { save.disabled = false; err.textContent = e.message; });
       });
@@ -2714,7 +2714,7 @@
           el('dt', null, _t('เวอร์ชัน')), el('dd', null, State.app.version),
           el('dt', null, _t('เวอร์ชันหน้าจอ')), el('dd', null, I18N.version),
           el('dt', null, 'API'), el('dd', { class: 'small mono' }, C.API_URL),
-          el('dt', null, 'Supabase (ทดลอง)'), el('dd', { class: 'small mono' }, C.SUPABASE_API_URL || _t('ยังไม่ตั้งค่า')),
+          el('dt', null, 'Supabase'), el('dd', { class: 'small mono' }, C.SUPABASE_API_URL || _t('ยังไม่ตั้งค่า')),
           el('dt', null, 'LIFF ID'), el('dd', { class: 'mono' }, C.LIFF_ID))),
         el('button', { class: 'btn btn-outline btn-block', onclick: function () {
           clear(supabaseRes); append(supabaseRes, loadingBox());

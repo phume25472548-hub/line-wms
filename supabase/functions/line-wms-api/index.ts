@@ -231,16 +231,27 @@ function recordView(r: Row, orders: Record<string, Row>, channels: Record<string
 
 async function readAction(db: ReturnType<typeof serviceClient>, action: string, p: Row, user: WmsUser): Promise<unknown> {
   const allowed = new Set(["product.get", "product.search", "product.history", "order.check", "order.get", "history.search",
-    "dashboard", "users.options", "reconcile", "admin.users", "admin.settings", "admin.channels", "finance.summary",
-    "finance.pending", "finance.order", "finance.records", "finance.costs", "product.prices", "pos.bill", "pos.bills"]);
+    "dashboard", "users.options", "request.status", "reconcile", "admin.users", "admin.settings", "admin.channels", "finance.summary",
+    "finance.pending", "finance.order", "finance.records", "finance.costs", "finance.legacy.monthly", "product.prices", "pos.bill", "pos.bills"]);
   if (!allowed.has(action)) throw new ApiError("ACTION_NOT_MIGRATED", "คำสั่งนี้ยังไม่ได้ย้ายจาก Apps Script", 501);
   const adminActions = new Set(["admin.users", "admin.settings", "admin.channels", "finance.summary", "finance.pending",
-    "finance.order", "finance.records", "finance.costs"]);
+    "finance.order", "finance.records", "finance.costs", "finance.legacy.monthly"]);
   if (adminActions.has(action) && user.role !== "ADMIN") throw new ApiError("FORBIDDEN", "ไม่มีสิทธิ์ใช้งานคำสั่งนี้", 403);
 
   const need = async (...names: string[]) => Object.fromEntries(await Promise.all(names.map(async (name) => [name, await rows(db, name)])));
   const keyBy = (arr: Row[], key: string) => Object.fromEntries(arr.map((r) => [r[key], r]));
   const today = dayInBangkok();
+  if (action === "request.status") {
+    const requestId = text(p.requestId).trim();
+    if (!requestId) throw new ApiError("INVALID_REQUEST", "ไม่พบรหัสคำขอ");
+    const { data, error } = await db.from("request_log").select("request_id,action,user_id,status,operation_id,result_json,created_at")
+      .eq("request_id", requestId).maybeSingle();
+    if (error) throw new ApiError("DATABASE_ERROR", "ตรวจสอบสถานะรายการไม่สำเร็จ", 500);
+    if (!data) return { status: "NONE" };
+    if (data.user_id !== user.id) throw new ApiError("FORBIDDEN", "ไม่มีสิทธิ์ตรวจสอบรายการนี้", 403);
+    return { status: data.status || "PENDING", action: data.action, operationId: data.operation_id,
+      data: data.result_json || {}, createdAt: data.created_at };
+  }
   if (action === "product.get" || action === "product.search") {
     const all = await need("products", "stock_balance", "prices");
     const bal = keyBy(all.stock_balance, "sku"), price = keyBy(all.prices, "sku");
@@ -369,6 +380,16 @@ async function readAction(db: ReturnType<typeof serviceClient>, action: string, 
       (!channel||r.channel_id===channel)&&(!q||text(r.external_order_id).includes(q)||r.internal_order_id===q)&&(!from||text(r.received_date)>=from)&&(!to||text(r.received_date)<=to)&&(!p.onlyLoss||n(r.profit)<0));
     const items=matched.slice(0,limit).map((r:Row)=>recordView(r,orders,channels)); return {items,total:matched.length,truncated:matched.length>items.length};
   }
+  if (action === "finance.legacy.monthly") {
+    const year = text(p.year).trim();
+    if (!/^\d{4}$/.test(year) || Number(year) < 2000 || Number(year) > 2100) throw new ApiError("INVALID_DATE", "ปีรายงานไม่ถูกต้อง");
+    const from = `${year}-01-01`, to = `${Number(year) + 1}-01-01`;
+    const { data, error } = await db.from("legacy_monthly_financial_totals").select("month_start,summary_kind,category,amount,entry_count,source_name")
+      .gte("month_start", from).lt("month_start", to).order("month_start").order("summary_kind").order("category");
+    if (error) throw new ApiError("DATABASE_ERROR", "โหลดสรุปยอดย้อนหลังไม่สำเร็จ", 500);
+    return { items: (data || []).map((r: Row) => ({ month: text(r.month_start).slice(0, 7), kind: r.summary_kind,
+      category: r.category, amount: round(n(r.amount)), count: n(r.entry_count), source: r.source_name })) };
+  }
   if (action === "finance.order") {
     const all=await need("orders","order_items","products","channels","fin_orders","fin_costs","sales_bills");
     const channels=keyBy(all.channels,"channel_id"), products=keyBy(all.products,"sku"), orders=keyBy(all.orders,"internal_order_id");
@@ -398,6 +419,397 @@ async function readAction(db: ReturnType<typeof serviceClient>, action: string, 
     return {date,q,summary:sum,items,showProfit:user.role==="ADMIN"};
   }
   throw new ApiError("ACTION_NOT_MIGRATED", "คำสั่งนี้ยังไม่ได้ย้ายจาก Apps Script", 501);
+}
+
+function writeText(value: unknown, max: number, label: string, required = false): string {
+  const valueText = text(value).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "").trim();
+  if (required && !valueText) throw new ApiError("INVALID_TEXT", `กรุณาระบุ${label}`);
+  if (valueText.length > max) throw new ApiError("INVALID_TEXT", `${label}ยาวเกิน ${max} ตัวอักษร`);
+  return valueText;
+}
+function writeSku(value: unknown): string {
+  const sku = text(value).trim().toUpperCase();
+  if (!/^[A-Z0-9][A-Z0-9._-]{0,39}$/.test(sku)) throw new ApiError("INVALID_SKU", "รหัส SKU ไม่ถูกต้อง");
+  return sku;
+}
+function writeMoney(value: unknown, label: string): number {
+  const raw = text(value).replace(/[ ,฿]/g, "");
+  if (!/^\d+(\.\d+)?$/.test(raw)) throw new ApiError("INVALID_MONEY", `${label}ต้องเป็นตัวเลข 0 ขึ้นไป`);
+  const amount = Number(raw);
+  if (!Number.isFinite(amount) || amount > 100000000 || Math.abs(Math.round(amount * 100) - amount * 100) > 1e-6) {
+    throw new ApiError("INVALID_MONEY", `${label}ใส่ทศนิยมได้ไม่เกิน 2 ตำแหน่ง`);
+  }
+  return round(amount);
+}
+function writeNonNegInt(value: unknown, label: string): number {
+  const raw = text(value).trim(); const valueNumber = Number(raw);
+  if (!raw || !Number.isInteger(valueNumber) || valueNumber < 0 || valueNumber > 10000000) {
+    throw new ApiError("INVALID_QTY", `${label}ต้องเป็นจำนวนเต็ม 0 ขึ้นไป`);
+  }
+  return valueNumber;
+}
+function bangkokTimestamp(): string {
+  return new Date().toISOString();
+}
+function requireWrite(user: WmsUser, admin = false) {
+  if (admin && user.role !== "ADMIN") throw new ApiError("FORBIDDEN", "ไม่มีสิทธิ์ใช้งานคำสั่งนี้", 403);
+  if (!admin && !new Set(["ADMIN", "STAFF"]).has(user.role)) throw new ApiError("FORBIDDEN", "ไม่มีสิทธิ์บันทึกรายการ", 403);
+}
+async function fullUpsertRow(db: ReturnType<typeof serviceClient>, table: string, key: string, value: string, fields: Row, defaults: Row = {}): Promise<Row> {
+  const { data, error } = await db.from(table).select("*").eq(key, value).maybeSingle();
+  if (error) throw new ApiError("DATABASE_ERROR", "อ่านข้อมูลก่อนบันทึกไม่สำเร็จ", 500);
+  return { ...defaults, ...(data || {}), ...fields, [key]: value };
+}
+async function commitWritePlan(db: ReturnType<typeof serviceClient>, requestId: string, action: string, user: WmsUser,
+  counterKeys: string[], appends: Row[], upserts: Row[], moves: Row[], result: Row, eventAt = bangkokTimestamp(), existingReservation: Row | null = null) {
+  if (!/^[A-Za-z0-9_-]{8,64}$/.test(requestId)) throw new ApiError("INVALID_REQUEST", "คำขอไม่ถูกต้อง (ไม่มีรหัสคำขอ) กรุณาเปิดหน้าจอใหม่");
+  let reservation = existingReservation;
+  if (!reservation) {
+    const { data, error: reserveError } = await db.rpc("wms_reserve_write", {
+      p_request_id: requestId, p_action: action, p_user_id: user.id, p_counter_keys: counterKeys,
+    });
+    if (reserveError) throw new ApiError(reserveError.message || "DATABASE_ERROR", "จองเลขรายการไม่สำเร็จ", 500);
+    reservation = data;
+  }
+  if (reservation?.replay) return { data: reservation.data || {}, replay: true };
+  const operationId = text(reservation?.operationId);
+  if (!operationId) throw new ApiError("DATABASE_ERROR", "ระบบไม่สามารถจองเลขปฏิบัติการได้", 500);
+  const fullResult = { ...result, operationId };
+  const finalizedAppends = appends.map((group) => group.table === "wms_audit_log"
+    ? { ...group, rows: group.rows.map((row: Row, index: number) => ({ ...row,
+      log_id: `${operationId}-A${index + 1}`, operation_id: operationId })) }
+    : group);
+  const finalizedUpserts = upserts.map((item) => item.table === "stock_balance"
+    ? { ...item, row: { ...item.row, updated_at: item.row.updated_at || eventAt,
+      last_operation_id: item.row.last_operation_id || operationId } }
+    : item.table === "fin_orders" ? { ...item, row: { ...item.row, operation_id: operationId } } : item);
+  const { data, error } = await db.rpc("wms_commit_write_plan", {
+    p_request_id: requestId, p_action: action, p_user_id: user.id, p_operation_id: operationId,
+    p_event_at: eventAt, p_appends: finalizedAppends, p_upserts: finalizedUpserts, p_moves: moves, p_result: fullResult,
+  });
+  if (error) throw new ApiError(error.message || "DATABASE_ERROR", "บันทึกรายการไม่สำเร็จ", 500, error.details || null);
+  return { data: data?.data || fullResult, replay: !!data?.replay };
+}
+function auditGroup(operationId: string, eventAt: string, user: WmsUser, rowsIn: Row[]): Row | null {
+  if (!rowsIn.length) return null;
+  return { table: "wms_audit_log", rows: rowsIn.map((r, i) => ({
+    log_id: `${operationId}-A${i + 1}`, event_at: eventAt, user_id: user.id, user_name: user.name,
+    action: r.action, target: r.target, details: typeof r.details === "string" ? r.details : JSON.stringify(r.details || {}), operation_id: operationId,
+  })) };
+}
+
+async function writeAction(db: ReturnType<typeof serviceClient>, action: string, p: Row, user: WmsUser, requestId: string): Promise<unknown> {
+  const eventAt = bangkokTimestamp();
+  const date = dayInBangkok(); const stamp = date.replace(/-/g, "");
+  const pad = (value: unknown, size: number) => String(value).padStart(size, "0");
+  const appendGroups: Row[] = []; const upserts: Row[] = []; const audits: Row[] = []; const moves: Row[] = [];
+  let counterKeys: string[] = [];
+  let result: Row = {};
+  if (!/^[A-Za-z0-9_-]{8,64}$/.test(requestId)) throw new ApiError("INVALID_REQUEST", "คำขอไม่ถูกต้อง (ไม่มีรหัสคำขอ) กรุณาเปิดหน้าจอใหม่");
+  const docPrefixes: Record<string,string> = { "stock.in":"IN", "return.supplier":"SR", writeoff:"WO", transfer:"TF", adjust:"ADJ", "return.customer":"RT" };
+  if (docPrefixes[action]) counterKeys.push(`${docPrefixes[action]}-${stamp}`);
+  if (action === "order.create" || action === "pos.sale") {
+    counterKeys.push(`ORD-${stamp}`);
+    const channelId = writeText(p.channelId, 30, "ช่องทางขาย", true).toUpperCase();
+    const { data: channel, error: channelError } = await db.from("channels").select("channel_id,order_mode,prefix,active").eq("channel_id",channelId).maybeSingle();
+    if (channelError) throw new ApiError("DATABASE_ERROR", "อ่านช่องทางขายไม่สำเร็จ", 500);
+    if (channel?.order_mode === "AUTO") {
+      const dstr = stamp;
+      counterKeys.push(`ORDNO-${text(channel.prefix || channel.channel_id).toUpperCase()}-${dstr}`);
+    }
+  }
+  const { data: reservation, error: reservationError } = await db.rpc("wms_reserve_write", {
+    p_request_id: requestId, p_action: action, p_user_id: user.id, p_counter_keys: counterKeys,
+  });
+  if (reservationError) throw new ApiError(reservationError.message || "DATABASE_ERROR", "จองเลขรายการไม่สำเร็จ", 500);
+  if (reservation?.replay) return { data: reservation.data || {}, replay: true };
+  const counter = (key: string) => n(reservation?.counters?.[key]);
+  const docNo = (prefix: string, digits = 4) => `${prefix}-${stamp}-${pad(counter(`${prefix}-${stamp}`),digits)}`;
+  const autoNo = async (channel: Row) => {
+    const prefix = text(channel.prefix || channel.channel_id).toUpperCase();
+    const dstr = stamp;
+    const setting = await db.from("wms_settings").select("value").eq("key","ORDER_RUNNING_DIGITS").maybeSingle();
+    const digits = Math.min(Math.max(n(setting.data?.value) || 4, 3), 8);
+    return `${prefix}-${dstr}-${pad(counter(`ORDNO-${prefix}-${dstr}`),digits)}`;
+  };
+  const loadProducts = async (lines: Row[], allowInactive = false) => {
+    if (!Array.isArray(lines) || !lines.length) throw new ApiError("EMPTY_LINES", "กรุณาระบุสินค้าอย่างน้อย 1 รายการ");
+    if (lines.length > 50) throw new ApiError("TOO_MANY_LINES", "รายการมากเกินไป");
+    const checked = lines.map((line: Row, i: number) => ({ sku:writeSku(line?.sku), qty:writeNonNegInt(line?.qty,`จำนวนบรรทัดที่ ${i+1}`) }));
+    if (checked.some((line) => line.qty < 1)) throw new ApiError("INVALID_QTY", "จำนวนสินค้าต้องมากกว่า 0");
+    const skus = [...new Set(checked.map((line) => line.sku))];
+    const [{data:products,error:productError},{data:balances,error:balanceError}] = await Promise.all([
+      db.from("products").select("*").in("sku",skus), db.from("stock_balance").select("*").in("sku",skus),
+    ]);
+    if (productError || balanceError) throw new ApiError("DATABASE_ERROR", "อ่านสินค้าและยอดคงเหลือไม่สำเร็จ",500);
+    const productBy = Object.fromEntries((products||[]).map((row:Row)=>[row.sku,row]));
+    const balanceBy = Object.fromEntries((balances||[]).map((row:Row)=>[row.sku,row]));
+    for (const sku of skus) if (!productBy[sku] || (!allowInactive && !productBy[sku].active)) throw new ApiError("SKU_NOT_FOUND", `ไม่พบสินค้าที่ใช้งานได้ ${sku}`);
+    return { checked, productBy, balanceBy };
+  };
+  const admin = action.startsWith("admin.") || action === "finance.cost.save" || action === "finance.payment.save" || action === "product.price.save";
+  requireWrite(user, admin);
+
+  if (action === "product.save") {
+    const sku = writeSku(p.sku), isNew = !!p.isNew;
+    const { data: existing, error } = await db.from("products").select("*").eq("sku", sku).maybeSingle();
+    if (error) throw new ApiError("DATABASE_ERROR", "อ่านข้อมูลสินค้าไม่สำเร็จ", 500);
+    if (isNew && existing) throw new ApiError("DUPLICATE_SKU", `SKU ${sku} มีอยู่ในระบบแล้ว`);
+    if (!isNew && !existing) throw new ApiError("SKU_NOT_FOUND", `ไม่พบสินค้า ${sku}`);
+    const name = writeText(p.name, 120, "ชื่อสินค้า", true), category = writeText(p.category, 60, "หมวดหมู่");
+    const unit = writeText(p.unit, 20, "หน่วย") || "ชิ้น";
+    const defaultStock = await db.from("wms_settings").select("value").eq("key", "DEFAULT_MIN_STOCK").maybeSingle();
+    const minStock = p.minStock == null || p.minStock === "" ? (Number(defaultStock.data?.value) || 0) : writeNonNegInt(p.minStock, "จุดแจ้งเตือน");
+    const active = p.active == null ? true : !!p.active;
+    if (!active && existing) {
+      const { data: balance } = await db.from("stock_balance").select("total_qty").eq("sku", sku).maybeSingle();
+      if (n(balance?.total_qty) > 0) throw new ApiError("HAS_STOCK", `ปิดใช้งานไม่ได้ เพราะยังมีสต๊อกคงเหลือ ${n(balance?.total_qty)} ${unit}`);
+    }
+    const fields = { product_name:name, category:category || null, unit, min_stock:minStock, active, updated_at:eventAt,
+      ...(isNew ? { created_at:eventAt, created_by:user.name } : {}) };
+    upserts.push({ table:"products", keyColumn:"sku", row:await fullUpsertRow(db,"products","sku",sku,fields,{created_at:eventAt,created_by:user.name}) });
+    let price: number | null = null;
+    if (p.salePrice !== undefined && p.salePrice !== null && text(p.salePrice).trim() !== "") {
+      price = writeMoney(p.salePrice, "ราคาขายหลัก");
+      const { data: currentPrice } = await db.from("prices").select("*").eq("sku", sku).maybeSingle();
+      if (n(currentPrice?.sale_price) !== price) {
+        if (user.role !== "ADMIN") throw new ApiError("FORBIDDEN", "เฉพาะผู้ดูแลระบบ (ADMIN) ที่ตั้งหรือแก้ราคาขายหลักได้", 403);
+        upserts.push({ table:"prices", keyColumn:"sku", row:{ ...(currentPrice || {}), sku, sale_price:price, updated_at:eventAt, updated_by:user.name, note:currentPrice?.note || "" } });
+        audits.push({ action:"PRICE_UPDATE", target:sku, details:{ before:currentPrice?.sale_price ?? null, after:price, note:"" } });
+      }
+    }
+    if (isNew) {
+      upserts.push({ table:"stock_balance", keyColumn:"sku", row:{ sku, available_qty:0, inspection_qty:0, total_qty:0, updated_at:eventAt, last_operation_id:"" } });
+    }
+    audits.push({ action:isNew ? "PRODUCT_CREATE" : "PRODUCT_UPDATE", target:sku,
+      details:{ before:existing, after:fields } });
+    result = { message:isNew ? `สร้างสินค้า ${sku} เรียบร้อย` : `บันทึกข้อมูลสินค้า ${sku} เรียบร้อย`,
+      product:{sku,name,category,unit,minStock,active,price} };
+  } else if (action === "product.price.save") {
+    const sku=writeSku(p.sku), price=writeMoney(p.salePrice,"ราคาขายหลัก"), note=writeText(p.note,200,"หมายเหตุ");
+    const [{data:product},{data:before}] = await Promise.all([
+      db.from("products").select("*").eq("sku",sku).eq("active",true).maybeSingle(),
+      db.from("prices").select("*").eq("sku",sku).maybeSingle(),
+    ]);
+    if (!product) throw new ApiError("SKU_NOT_FOUND", `ไม่พบสินค้า ${sku}`);
+    upserts.push({table:"prices",keyColumn:"sku",row:{...(before||{}),sku,sale_price:price,updated_at:eventAt,updated_by:user.name,note}});
+    audits.push({action:"PRICE_UPDATE",target:sku,details:{before:before?n(before.sale_price):null,after:price,note}});
+    result={message:`ตั้งราคาขาย ${product.product_name} = ${price.toFixed(2)} บาท/${product.unit||"ชิ้น"} เรียบร้อย`,sku,salePrice:price};
+  } else if (action === "finance.cost.save") {
+    const sku=writeSku(p.sku), unitCost=writeMoney(p.unitCost,"ต้นทุนต่อชิ้น"), note=writeText(p.note,200,"หมายเหตุ");
+    const [{data:product},{data:before}] = await Promise.all([
+      db.from("products").select("*").eq("sku",sku).eq("active",true).maybeSingle(),
+      db.from("fin_costs").select("*").eq("sku",sku).maybeSingle(),
+    ]);
+    if (!product) throw new ApiError("SKU_NOT_FOUND", `ไม่พบสินค้า ${sku}`);
+    upserts.push({table:"fin_costs",keyColumn:"sku",row:{...(before||{}),sku,unit_cost:unitCost,updated_at:eventAt,updated_by:user.name,note}});
+    audits.push({action:"FIN_COST_UPDATE",target:sku,details:{before:before?round(n(before.unit_cost)):null,after:unitCost,note}});
+    result={message:`บันทึกต้นทุน ${product.product_name} = ${unitCost.toFixed(2)} บาท/${product.unit||"ชิ้น"} เรียบร้อย`,sku,unitCost};
+  } else if (action === "finance.payment.save") {
+    const internalOrderId=writeText(p.internalOrderId,40,"รหัสออเดอร์",true).toUpperCase();
+    const [{data:order},{data:items,error:itemError},{data:costRows}] = await Promise.all([
+      db.from("orders").select("*").eq("internal_order_id",internalOrderId).maybeSingle(),
+      db.from("order_items").select("*").eq("internal_order_id",internalOrderId),
+      db.from("fin_costs").select("*"),
+    ]);
+    if(!order)throw new ApiError("ORDER_NOT_FOUND","ไม่พบออเดอร์ในระบบ");
+    if(order.order_status==="CANCELLED")throw new ApiError("ORDER_CANCELLED",`ออเดอร์ ${order.external_order_id} ถูกยกเลิกแล้ว ไม่ต้องบันทึกยอดเงิน`);
+    if(itemError)throw new ApiError("DATABASE_ERROR","อ่านรายการสินค้าในออเดอร์ไม่สำเร็จ",500);
+    if(!items?.length)throw new ApiError("ORDER_NOT_FOUND","ออเดอร์นี้ไม่มีรายการสินค้า");
+    const {data:channel}=await db.from("channels").select("*").eq("channel_id",order.channel_id).maybeSingle();
+    const sale=writeMoney(p.salePrice,"ราคาที่ลูกค้าจ่าย"),received=writeMoney(p.receivedAmount,"เงินที่ได้รับจริง");
+    const receivedDate=text(p.receivedDate)||today;
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(receivedDate)||new Date(`${receivedDate}T00:00:00Z`).toISOString().slice(0,10)!==receivedDate)
+      throw new ApiError("INVALID_DATE","วันที่ได้รับเงินไม่ถูกต้อง");
+    if(receivedDate>today)throw new ApiError("INVALID_DATE","วันที่ได้รับเงินเป็นวันในอนาคตไม่ได้");
+    const note=writeText(p.note,300,"หมายเหตุ");
+    const overrides:Record<string,number>={}; const newCosts=p.newCosts&&typeof p.newCosts==="object"&&!Array.isArray(p.newCosts)?p.newCosts:{};
+    const inOrder=new Set((items||[]).map((item:Row)=>text(item.sku)));
+    for(const [rawSku,value] of Object.entries(newCosts as Row)){
+      const sku=writeSku(rawSku);if(!inOrder.has(sku))throw new ApiError("SKU_NOT_IN_ORDER",`สินค้า ${sku} ไม่อยู่ในออเดอร์นี้`);
+      overrides[sku]=writeMoney(value,`ต้นทุนของ ${sku}`);
+    }
+    const costBySku=Object.fromEntries((costRows||[]).map((c:Row)=>[c.sku,c]));
+    let costAmount=0;const lines:Row[]=[],missing:string[]=[];
+    for(const item of items as Row[]){
+      const qty=n(item.quantity)-n(item.returned_qty), existingCost=costBySku[item.sku];
+      const unitCost=Object.prototype.hasOwnProperty.call(overrides,item.sku)?overrides[item.sku]:(existingCost? n(existingCost.unit_cost):null);
+      if(unitCost==null&&qty>0)missing.push(item.sku);
+      const lineCost=unitCost==null?null:round(unitCost*qty);
+      if(lineCost!=null)costAmount+=lineCost;
+      lines.push({sku:item.sku,name:item.product_name,unit:"ชิ้น",qtySold:n(item.quantity),qtyReturned:n(item.returned_qty),qty,unitCost,lineCost});
+    }
+    if(missing.length)throw new ApiError("COST_MISSING",`ยังไม่มีต้นทุนของสินค้า: ${missing.join(", ")} — กรุณากรอกต้นทุนต่อชิ้นก่อนบันทึก`,400,{skus:missing});
+    costAmount=round(costAmount);
+    for(const [sku,unitCost] of Object.entries(overrides)){
+      const before=costBySku[sku];if(before&&round(n(before.unit_cost))===unitCost)continue;
+      upserts.push({table:"fin_costs",keyColumn:"sku",row:{...(before||{}),sku,unit_cost:unitCost,updated_at:eventAt,updated_by:user.name,note:before?.note||""}});
+      audits.push({action:"FIN_COST_UPDATE",target:sku,details:{before:before?round(n(before.unit_cost)):null,after:unitCost,via:order.external_order_id}});
+    }
+    const feeAmount=round(sale-received),profit=round(received-costAmount),marginPct=sale>0?round(profit/sale*100):0;
+    const costDetail=lines.map((line)=>`${line.sku} ${line.qty}x${n(line.unitCost).toFixed(2)}`).join("; ").slice(0,2000);
+    const beforeRead=await db.from("fin_orders").select("*").eq("internal_order_id",internalOrderId).maybeSingle();
+    if(beforeRead.error)throw new ApiError("DATABASE_ERROR","อ่านข้อมูลการเงินเดิมไม่สำเร็จ",500);
+    const before=beforeRead.data;
+    const finFields={channel_id:order.channel_id,external_order_id:order.external_order_id,sale_price:sale,received_amount:received,
+      fee_amount:feeAmount,cost_amount:costAmount,profit,margin_pct:marginPct,received_date:receivedDate,cost_detail:costDetail,
+      note,updated_by:user.name,updated_at:eventAt,operation_id:"PENDING"};
+    const finRow=await fullUpsertRow(db,"fin_orders","internal_order_id",internalOrderId,finFields,{internal_order_id:internalOrderId});
+    upserts.push({table:"fin_orders",keyColumn:"internal_order_id",row:finRow});
+    audits.push({action:before?"FIN_PAYMENT_UPDATE":"FIN_PAYMENT_CREATE",target:internalOrderId,
+      details:{orderNo:order.external_order_id,before:before?recordView(before,{},{}):null,after:finFields}});
+    result={message:`${before?"แก้ไข":"บันทึก"}ยอดเงินออเดอร์ ${order.external_order_id} เรียบร้อย`,record:{internalOrderId,channelId:order.channel_id,
+      channelName:channel?.channel_name||order.channel_id,orderNo:order.external_order_id,salePrice:sale,receivedAmount:received,feeAmount,costAmount,
+      profit,marginPct,receivedDate,note},lines,updated:!!before};
+  } else if (action === "admin.channel.save") {
+    const id=writeText(p.channelId,20,"รหัสช่องทาง",true).toUpperCase();
+    if (!/^[A-Z0-9_]{2,20}$/.test(id)) throw new ApiError("INVALID_VALUE","รหัสช่องทางใช้ได้เฉพาะ A-Z 0-9 _ ยาว 2–20 ตัว");
+    const isNew=!!p.isNew;
+    const [{data:existing},{data:allChannels}] = await Promise.all([
+      db.from("channels").select("*").eq("channel_id",id).maybeSingle(),
+      db.from("channels").select("*").order("sort_order"),
+    ]);
+    if (isNew&&existing) throw new ApiError("DUPLICATE",`มีรหัสช่องทาง ${id} อยู่แล้ว`);
+    if (!isNew&&!existing) throw new ApiError("CHANNEL_NOT_FOUND",`ไม่พบช่องทาง ${id}`);
+    const name=writeText(p.name,60,"ชื่อช่องทาง",true), mode=text(p.mode).trim();
+    if (!new Set(["SCAN","AUTO"]).has(mode)) throw new ApiError("INVALID_VALUE","โหมดเลขออเดอร์ไม่ถูกต้อง");
+    const prefix=text(p.prefix).trim().toUpperCase();
+    if (mode==="AUTO"&&!/^[A-Z0-9]{2,10}$/.test(prefix)) throw new ApiError("INVALID_VALUE","ช่องทางแบบออกเลขอัตโนมัติต้องมีคำนำหน้า A-Z 0-9 ยาว 2–10 ตัว");
+    if (mode==="AUTO"&&(allChannels||[]).some((c:Row)=>c.channel_id!==id&&c.order_mode==="AUTO"&&text(c.prefix).toUpperCase()===prefix)) {
+      throw new ApiError("DUPLICATE",`คำนำหน้า ${prefix} ถูกใช้แล้ว`);
+    }
+    const sortOrder=p.sortOrder==null||p.sortOrder===""?(existing?n(existing.sort_order):(allChannels||[]).length+1):writeNonNegInt(p.sortOrder,"ลำดับ");
+    const fields={channel_name:name,order_mode:mode,prefix:mode==="AUTO"?prefix:"",active:p.active==null||!!p.active,sort_order:sortOrder,updated_at:eventAt};
+    upserts.push({table:"channels",keyColumn:"channel_id",row:{...(existing||{}),channel_id:id,...fields}});
+    audits.push({action:isNew?"CHANNEL_CREATE":"CHANNEL_UPDATE",target:id,details:{before:existing,after:fields}});
+    result={message:`บันทึกช่องทาง ${name} เรียบร้อย`,channelId:id};
+  } else if (action === "admin.user.save") {
+    const userId=writeText(p.userId,80,"รหัสผู้ใช้",true);
+    const {data:existing,error}=await db.from("wms_users").select("*").eq("line_user_id",userId).maybeSingle();
+    if(error)throw new ApiError("DATABASE_ERROR","อ่านข้อมูลพนักงานไม่สำเร็จ",500);
+    if(!existing)throw new ApiError("USER_NOT_FOUND","ไม่พบผู้ใช้");
+    const name=writeText(p.name,60,"ชื่อพนักงาน",true),role=text(p.role).toUpperCase();
+    if(!new Set(["ADMIN","STAFF","VIEWER"]).has(role))throw new ApiError("INVALID_VALUE","บทบาทไม่ถูกต้อง");
+    const active=!!p.active;
+    if(!(role==="ADMIN"&&active)){
+      const {count,error:countError}=await db.from("wms_users").select("line_user_id",{count:"exact",head:true})
+        .eq("role","ADMIN").eq("active",true).neq("line_user_id",userId);
+      if(countError)throw new ApiError("DATABASE_ERROR","ตรวจสอบผู้ดูแลระบบไม่สำเร็จ",500);
+      if(!count)throw new ApiError("LAST_ADMIN","ต้องมี ADMIN ที่ใช้งานอยู่อย่างน้อย 1 คน");
+    }
+    const fields={name,role,active};
+    upserts.push({table:"wms_users",keyColumn:"line_user_id",row:{...existing,line_user_id:userId,...fields}});
+    audits.push({action:"USER_UPDATE",target:userId,details:{before:{name:existing.name,role:existing.role,active:existing.active},after:fields}});
+    result={message:`บันทึกข้อมูลพนักงาน ${name} เรียบร้อย`};
+  } else if (action === "admin.setting.save") {
+    const editable=["COMPANY_NAME","SCAN_MODE","ORDER_RUNNING_DIGITS","DEFAULT_MIN_STOCK","STOCK_IN_TYPES","WRITE_OFF_REASONS","SUPPLIER_RETURN_REASONS","ADJUST_REASONS","CANCEL_REASONS","BACKUP_KEEP_DAYS","PAPER_SIZE","SHOP_NAME","SHOP_ADDRESS","SHOP_PHONE","SHOP_TAX_ID","BILL_FOOTER"];
+    const optional=["SHOP_NAME","SHOP_ADDRESS","SHOP_PHONE","SHOP_TAX_ID","BILL_FOOTER"];
+    const key=text(p.key).trim();
+    if(!editable.includes(key))throw new ApiError("INVALID_VALUE","รายการตั้งค่าไม่ถูกต้อง");
+    const max=key==="SHOP_ADDRESS"?300:optional.includes(key)?120:500;
+    let value=writeText(p.value,max,"ค่า",!optional.includes(key));
+    if(key==="PAPER_SIZE"){value=value.toUpperCase();if(!["A4","A5"].includes(value))throw new ApiError("INVALID_VALUE","ขนาดกระดาษไม่ถูกต้อง");}
+    if(key==="SHOP_TAX_ID"&&value&&!/^[0-9\- ]{10,20}$/.test(value))throw new ApiError("INVALID_VALUE","เลขประจำตัวผู้เสียภาษีต้องเป็นตัวเลข");
+    if(key==="SCAN_MODE"&&!new Set(["QTY","EACH"]).has(value))throw new ApiError("INVALID_VALUE","โหมดสแกนไม่ถูกต้อง");
+    if(key==="ORDER_RUNNING_DIGITS"){const digits=writeNonNegInt(value,"จำนวนหลัก");if(digits<3||digits>8)throw new ApiError("INVALID_VALUE","จำนวนหลักต้องอยู่ระหว่าง 3–8");value=String(digits);}
+    if(key==="DEFAULT_MIN_STOCK"||key==="BACKUP_KEEP_DAYS")value=String(writeNonNegInt(value,"ค่า"));
+    if(/_REASONS$|_TYPES$/.test(key)&&!value.split(/[\n,;]+/).map((x)=>x.trim()).filter(Boolean).length)throw new ApiError("INVALID_VALUE","ต้องมีอย่างน้อย 1 รายการ");
+    const {data:existing,error}=await db.from("wms_settings").select("*").eq("key",key).maybeSingle();
+    if(error)throw new ApiError("DATABASE_ERROR","อ่านการตั้งค่าไม่สำเร็จ",500);
+    const row={...(existing||{}),key,value,description:existing?.description||""};
+    upserts.push({table:"wms_settings",keyColumn:"key",row});
+    audits.push({action:"SETTING_UPDATE",target:key,details:{before:existing?.value||"",after:value}});
+    result={message:"บันทึกการตั้งค่าเรียบร้อย"};
+  } else if (action === "stock.in" || action === "return.supplier" || action === "writeoff") {
+    const raw=Array.isArray(p.lines)?p.lines:[],{checked,productBy}=await loadProducts(raw,action!=="stock.in"), grouped=new Map<string,number>();
+    checked.forEach((l)=>grouped.set(l.sku,(grouped.get(l.sku)||0)+l.qty));
+    const lines=[...grouped.entries()].map(([sku,qty])=>({sku,qty}));
+    const key=action==="stock.in"?"STOCK_IN_TYPES":action==="return.supplier"?"SUPPLIER_RETURN_REASONS":"WRITE_OFF_REASONS";
+    const reason=writeText(action==="stock.in"?p.inType:p.reason,60,"เหตุผล",true),{data:s}=await db.from("wms_settings").select("value").eq("key",key).maybeSingle();
+    const choices=text(s?.value).split(/[\n,;]+/).map((x)=>x.trim()).filter(Boolean);if(choices.length&&!choices.includes(reason))throw new ApiError("INVALID_VALUE",`เหตุผล "${reason}" ไม่อยู่ในรายการที่กำหนด`);
+    const note=writeText(p.note,300,"หมายเหตุ");if(/^อื่น/.test(reason)&&!note)throw new ApiError("NOTE_REQUIRED","เลือก ‘อื่น ๆ’ กรุณาระบุหมายเหตุ");
+    const status=text(action==="stock.in"?(p.toStatus||"AVAILABLE"):p.fromStatus||"AVAILABLE");if(!["AVAILABLE","INSPECTION"].includes(status))throw new ApiError("INVALID_VALUE","สถานะสต๊อกไม่ถูกต้อง");
+    const prefix=action==="stock.in"?"IN":action==="return.supplier"?"SR":"WO",doc=docNo(prefix),supplier=action==="return.supplier"?writeText(p.supplier,100,"ชื่อซัพพลายเออร์",true):"",ref=action==="return.supplier"?writeText(p.refNo,60,"เลขอ้างอิง"):"";
+    lines.forEach((l,index)=>{const product=productBy[l.sku];moves.push({sku:l.sku,product_name:product.product_name,stock_status:status,delta:action==="stock.in"?l.qty:-l.qty,
+      transaction_type:action==="stock.in"?"IN":action==="return.supplier"?"SUPPLIER_RETURN":"WRITE_OFF",sub_type:action==="stock.in"?reason:action==="return.supplier"?supplier:"MANUAL",reference_id:doc,reason,note,user_name:user.name});
+      if(action==="return.supplier")appendGroups.push({table:"wms_returns",rows:[{return_id:`${doc}-${index+1}`,return_doc_no:doc,return_type:"SUPPLIER",internal_order_id:"",channel_id:"",external_order_id:"",sku:l.sku,product_name:product.product_name,quantity:l.qty,condition:"",from_status:status,supplier,reference_no:ref,reason,note,user_id:user.id,user_name:user.name,event_at:eventAt,operation_id:"PENDING"}]});});
+    result={message:action==="stock.in"?"รับสินค้าเข้าเรียบร้อย":action==="return.supplier"?"บันทึกส่งคืนซัพพลายเออร์เรียบร้อย":"ตัดสินค้าเสียเรียบร้อย",docNo:doc,
+      lines:lines.map((l)=>({sku:l.sku,name:productBy[l.sku].product_name,unit:productBy[l.sku].unit||"ชิ้น",qty:l.qty}))};
+  } else if (action === "transfer" || action === "adjust") {
+    const sku=writeSku(p.sku),{productBy,balanceBy}=await loadProducts([{sku,qty:1}],true),product=productBy[sku],note=writeText(p.note,300,"หมายเหตุ");
+    if(action==="transfer"){
+      const qty=writeNonNegInt(p.qty,"จำนวน"),target=text(p.target);if(qty<1||!new Set(["TO_AVAILABLE","TO_WRITE_OFF"]).has(target))throw new ApiError("INVALID_VALUE","จำนวนหรือผลการตรวจสอบไม่ถูกต้อง");
+      const doc=docNo("TF");let reason="ตรวจสอบแล้วสภาพดี";
+      if(target==="TO_AVAILABLE")moves.push({sku,product_name:product.product_name,stock_status:"INSPECTION",delta:-qty,transaction_type:"TRANSFER",sub_type:"INSPECTION_TO_AVAILABLE",reference_id:doc,reason,note,user_name:user.name},{sku,product_name:product.product_name,stock_status:"AVAILABLE",delta:qty,transaction_type:"TRANSFER",sub_type:"INSPECTION_TO_AVAILABLE",reference_id:doc,reason,note,user_name:user.name});
+      else{reason=writeText(p.reason,60,"เหตุผลการตัดเสีย",true);moves.push({sku,product_name:product.product_name,stock_status:"INSPECTION",delta:-qty,transaction_type:"WRITE_OFF",sub_type:"INSPECTION_FAILED",reference_id:doc,reason,note,user_name:user.name});}
+      result={message:target==="TO_AVAILABLE"?`ย้าย ${qty} ${product.unit||"ชิ้น"} เข้ายอดพร้อมขายแล้ว`:"ตัดเสียจากยอดรอตรวจสอบแล้ว",docNo:doc,lines:[{sku,name:product.product_name,unit:product.unit||"ชิ้น",qty}]};
+    }else{
+      const status=text(p.status||"AVAILABLE"),expected=writeNonNegInt(p.expectedQty,"ยอดในระบบ"),counted=writeNonNegInt(p.countedQty,"จำนวนที่นับได้"),reason=writeText(p.reason,60,"เหตุผล",true),balance=balanceBy[sku]||{};
+      if(!["AVAILABLE","INSPECTION"].includes(status))throw new ApiError("INVALID_VALUE","สถานะสต๊อกไม่ถูกต้อง");
+      const current=n(status==="INSPECTION"?balance.inspection_qty:balance.available_qty);if(current!==expected)throw new ApiError("STALE_BALANCE",`ยอดในระบบเปลี่ยนไป (ตอนนี้ ${current} ไม่ใช่ ${expected}) กรุณานับใหม่`,409,{current});
+      const diff=counted-current,doc=docNo("ADJ");if(diff)moves.push({sku,product_name:product.product_name,stock_status:status,delta:diff,transaction_type:"ADJUST",sub_type:diff>0?"COUNT_UP":"COUNT_DOWN",reference_id:doc,reason,note,user_name:user.name});
+      audits.push({action:"STOCK_COUNT",target:sku,details:{status,system:current,counted,diff,reason,doc}});result={message:diff===0?"ยอดตรงกับระบบ บันทึกผลการตรวจนับแล้ว":`ปรับยอดเรียบร้อย (ส่วนต่าง ${diff>0?"+":""}${diff})`,docNo:doc,diff,lines:[{sku,name:product.product_name,unit:product.unit||"ชิ้น",qty:diff}]};
+    }
+  } else if (action === "order.create" || action === "pos.sale") {
+    const channelId=writeText(p.channelId,30,"ช่องทางขาย",true).toUpperCase(),{data:ch}=await db.from("channels").select("*").eq("channel_id",channelId).maybeSingle();
+    if(!ch)throw new ApiError("CHANNEL_NOT_FOUND","ไม่พบช่องทางขาย");if(!ch.active)throw new ApiError("CHANNEL_INACTIVE","ช่องทางขายถูกปิดใช้งาน");
+    const raw=Array.isArray(p.lines)?p.lines:[],{checked,productBy}=await loadProducts(raw);if(action==="pos.sale"&&checked.length!==raw.length)throw new ApiError("DUPLICATE_LINE","มีสินค้าซ้ำหลายบรรทัด กรุณารวมเป็นบรรทัดเดียว");
+    const lines=checked.reduce((a,l)=>{const x=a.find((z:Row)=>z.sku===l.sku);if(x)x.qty+=l.qty;else a.push({...l});return a;},[] as Row[]),note=writeText(p.note,300,"หมายเหตุ");
+    if(action==="order.create"&&ch.order_mode==="AUTO")throw new ApiError("USE_POS","ช่องทางนี้เป็นช่องทางขายตรง กรุณาใช้เมนูขายหน้าร้าน");if(action==="pos.sale"&&ch.order_mode!=="AUTO")throw new ApiError("NOT_DIRECT","ช่องทางนี้เป็นช่องทางแพลตฟอร์ม กรุณาใช้เมนูขายสินค้าออก");
+    let ext=text(p.orderNo).trim().replace(/\s+/g,"").toUpperCase();if(action==="pos.sale")ext=await autoNo(ch);if(action==="order.create"&&(!/^[A-Z0-9][A-Z0-9\-_.\/#]{3,63}$/.test(ext)))throw new ApiError("INVALID_ORDER_NO","เลขออเดอร์ไม่ถูกต้อง");
+    const allOrders=await rows(db,"orders"),orderKey=`${channelId}|${ext}`;if(allOrders.some((o)=>o.order_key===orderKey&&o.order_status!=="CANCELLED"))throw new ApiError("DUPLICATE_ORDER",`ออเดอร์ ${ext} ถูกบันทึกแล้ว`);
+    const internal=docNo("ORD",5),totalQty=lines.reduce((a,l)=>a+l.qty,0),itemRows=lines.map((l,i)=>({order_item_id:`${internal}-${pad(i+1,2)}`,internal_order_id:internal,sku:l.sku,product_name:productBy[l.sku].product_name,quantity:l.qty,returned_qty:0}));
+    appendGroups.push({table:"orders",rows:[{internal_order_id:internal,channel_id:channelId,external_order_id:ext,order_key:orderKey,order_status:"COMPLETED",line_count:lines.length,total_qty:totalQty,created_by:user.id,created_by_name:user.name,created_at:eventAt,completed_at:eventAt,cancelled_by:"",cancelled_at:null,cancel_reason:"",note,operation_id:"PENDING"}]},{table:"order_items",rows:itemRows});
+    lines.forEach((l)=>moves.push({sku:l.sku,product_name:productBy[l.sku].product_name,stock_status:"AVAILABLE",delta:-l.qty,transaction_type:"OUT",sub_type:"SALE",reference_id:internal,channel_id:channelId,reason:ext,note,user_name:user.name}));
+    if(action==="order.create")result={message:"บันทึกการขายและตัดสต๊อกเรียบร้อย",internalOrderId:internal,orderNo:ext,channelId,channelName:ch.channel_name,totalQty,createdAt:eventAt,createdBy:user.name,lines:lines.map((l)=>({sku:l.sku,name:productBy[l.sku].product_name,unit:productBy[l.sku].unit||"ชิ้น",qty:l.qty}))};
+    else {
+      const payment=text(p.paymentMethod).toUpperCase();if(!["CASH","TRANSFER"].includes(payment))throw new ApiError("INVALID_VALUE","วิธีรับเงินไม่ถูกต้อง");
+      const billDiscount=p.billDiscount==null||p.billDiscount===""?0:writeMoney(p.billDiscount,"ส่วนลดท้ายบิล");
+      const customerName=writeText(p.customerName,80,"ชื่อลูกค้า"),customerPhone=writeText(p.customerPhone,20,"เบอร์โทรลูกค้า");
+      if(customerPhone&&!/^[0-9+\- ]{6,20}$/.test(customerPhone))throw new ApiError("INVALID_TEXT","เบอร์โทรลูกค้าไม่ถูกต้อง");
+      const skuList=lines.map((l)=>l.sku),[{data:prices},{data:costRows},{data:shopSettings}]=await Promise.all([
+        db.from("prices").select("*").in("sku",skuList),db.from("fin_costs").select("*").in("sku",skuList),
+        db.from("wms_settings").select("key,value").in("key",["SHOP_NAME","SHOP_ADDRESS","SHOP_PHONE","SHOP_TAX_ID","BILL_FOOTER"]),
+      ]);
+      const priceBy=Object.fromEntries((prices||[]).map((r:Row)=>[r.sku,r.sale_price])),costBy=Object.fromEntries((costRows||[]).map((r:Row)=>[r.sku,r.unit_cost])),settings=Object.fromEntries((shopSettings||[]).map((r:Row)=>[r.key,r.value]));
+      const items:Row[]=[],noList:string[]=[];let subtotal=0,lineDiscount=0,priceEdited=false;
+      for(const l of lines){const source=raw.find((r:Row)=>text(r.sku).toUpperCase()===l.sku),unitPrice=writeMoney(source?.unitPrice,`ราคาขายของ ${l.sku}`),listPrice=priceBy[l.sku]==null?null:n(priceBy[l.sku]),lineTotal=round(unitPrice*l.qty),discount=listPrice!=null&&listPrice>unitPrice?round((listPrice-unitPrice)*l.qty):0;
+        if(listPrice==null)noList.push(l.sku);else if(unitPrice!==listPrice)priceEdited=true;subtotal+=lineTotal;lineDiscount+=discount;items.push({sku:l.sku,name:productBy[l.sku].product_name,unit:productBy[l.sku].unit||"ชิ้น",qty:l.qty,listPrice,unitPrice,lineDiscount:discount,lineTotal});}
+      subtotal=round(subtotal);lineDiscount=round(lineDiscount);if(billDiscount>subtotal)throw new ApiError("INVALID_MONEY","ส่วนลดท้ายบิลมากกว่ายอดรวม");const total=round(subtotal-billDiscount);
+      if(p.expectedTotal!==undefined&&p.expectedTotal!==null&&p.expectedTotal!==""&&writeMoney(p.expectedTotal,"ยอดสุทธิ")!==total)throw new ApiError("TOTAL_MISMATCH","ยอดสุทธิไม่ตรงกับระบบ กรุณาตรวจราคาอีกครั้ง");
+      let cash=0,change=0;if(payment==="CASH"&&p.cashReceived!==undefined&&p.cashReceived!==null&&p.cashReceived!==""){cash=writeMoney(p.cashReceived,"เงินที่รับมา");if(cash<total)throw new ApiError("CASH_NOT_ENOUGH","เงินที่รับมาน้อยกว่ายอดสุทธิ");change=round(cash-total);}
+      const edited=priceEdited||billDiscount>0,header={shopName:settings.SHOP_NAME||"",address:settings.SHOP_ADDRESS||"",phone:settings.SHOP_PHONE||"",taxId:settings.SHOP_TAX_ID||"",footer:settings.BILL_FOOTER||""};
+      const bill={internalOrderId:internal,billNo:ext,channelId,channelName:ch.channel_name,billDate:date,createdAt:eventAt,customerName,customerPhone,seller:user.name,itemCount:items.length,totalQty,subtotal,lineDiscount,billDiscount,total,paymentMethod:payment,paymentLabel:payment==="CASH"?"เงินสด":"โอน",cashReceived:cash,change,priceEdited:edited,note,status:"COMPLETED",header,items};
+      appendGroups.push({table:"sales_bills",rows:[{internal_order_id:internal,bill_no:ext,channel_id:channelId,bill_date:date,customer_name:customerName,customer_phone:customerPhone,item_count:items.length,total_qty:totalQty,subtotal,line_discount:lineDiscount,bill_discount:billDiscount,total,payment_method:payment,cash_received:cash,change_amount:change,price_edited:edited,seller_id:user.id,seller_name:user.name,created_at:eventAt,header_json:header,note,operation_id:"PENDING"}]},
+        {table:"sales_bill_items",rows:items.map((i,index)=>({item_id:`${internal}-${pad(index+1,2)}`,internal_order_id:internal,bill_no:ext,sku:i.sku,product_name:i.name,unit:i.unit,qty:i.qty,list_price:i.listPrice,unit_price:i.unitPrice,line_discount:i.lineDiscount,line_total:i.lineTotal}))});
+      const financeRecorded=items.every((i)=>costBy[i.sku]!=null),costAmount=round(items.reduce((sum,i)=>sum+n(costBy[i.sku])*i.qty,0));
+      if(financeRecorded){const profit=round(total-costAmount),detail=items.map((i)=>`${i.sku} ${i.qty}x${n(costBy[i.sku]).toFixed(2)}`).join("; ").slice(0,2000);upserts.push({table:"fin_orders",keyColumn:"internal_order_id",row:{internal_order_id:internal,channel_id:channelId,external_order_id:ext,sale_price:total,received_amount:total,fee_amount:0,cost_amount:costAmount,profit,margin_pct:total?round(profit/total*100):0,received_date:date,cost_detail:detail,note:`ขายตรง ${payment==="CASH"?"เงินสด":"โอน"} (บันทึกอัตโนมัติจากบิล)`,updated_by:user.name,updated_at:eventAt,operation_id:"PENDING"}});}
+      if(edited)audits.push({action:"POS_PRICE_OVERRIDE",target:internal,details:{billNo:ext,billDiscount,items:items.filter((i)=>i.listPrice!=null&&i.listPrice!==i.unitPrice)}});
+      result={message:"ขายและตัดสต๊อกเรียบร้อย",internalOrderId:internal,orderNo:ext,billNo:ext,total,paymentMethod:payment,cashReceived:cash,change,totalQty,noListPrice:noList,financeRecorded,bill,lines:lines.map((l)=>({sku:l.sku,name:productBy[l.sku].product_name,unit:productBy[l.sku].unit||"ชิ้น",qty:l.qty}))};
+    }
+  } else if (action === "order.cancel" || action === "return.customer") {
+    const channelId=writeText(p.channelId,30,"ช่องทางขาย",true).toUpperCase(),orderNo=writeText(p.orderNo,80,"เลขออเดอร์",true).replace(/\s+/g,"").toUpperCase();
+    const all=await rows(db,"orders"),order=all.find((o)=>o.internal_order_id===orderNo)||[...all].reverse().find((o)=>o.channel_id===channelId&&o.external_order_id===orderNo||o.order_key===`${channelId}|${orderNo}`);
+    if(!order)throw new ApiError("ORDER_NOT_FOUND","ไม่พบออเดอร์ในช่องทางที่เลือก");const {data:items}=await db.from("order_items").select("*").eq("internal_order_id",order.internal_order_id),note=writeText(p.note,300,"หมายเหตุ");
+    if(action==="order.cancel"){
+      if(order.order_status==="CANCELLED")throw new ApiError("ALREADY_CANCELLED","ออเดอร์นี้ถูกยกเลิกแล้ว");const reason=writeText(p.reason,60,"เหตุผลการยกเลิก",true),restored:Row[]=[];
+      for(const it of items||[]){const qty=n(it.quantity)-n(it.returned_qty);if(qty<=0)continue;moves.push({sku:it.sku,product_name:it.product_name,stock_status:"AVAILABLE",delta:qty,transaction_type:"CANCEL",sub_type:"ORDER_CANCEL",reference_id:order.internal_order_id,channel_id:channelId,reason,note,user_name:user.name});restored.push({sku:it.sku,name:it.product_name,qty});}
+      upserts.push({table:"orders",keyColumn:"internal_order_id",row:{...order,order_status:"CANCELLED",cancelled_by:user.name,cancelled_at:eventAt,cancel_reason:reason+(note?` — ${note}`:"")}});result={message:`ยกเลิกออเดอร์ ${order.external_order_id} และคืนสต๊อกเรียบร้อย`,internalOrderId:order.internal_order_id,orderNo:order.external_order_id,lines:restored};
+    }else{
+      if(order.order_status==="CANCELLED")throw new ApiError("ORDER_CANCELLED","ออเดอร์นี้ถูกยกเลิกแล้ว");const raw=Array.isArray(p.lines)?p.lines:[],by=Object.fromEntries((items||[]).map((it:Row)=>[it.sku,it])),used:Record<string,number>={};if(!raw.length)throw new ApiError("EMPTY_LINES","กรุณาเลือกรายการรับคืน");
+      const doc=docNo("RT"),out:Row[]=[];for(let i=0;i<raw.length;i++){const l=raw[i],sku=writeSku(l.sku),qty=writeNonNegInt(l.qty,"จำนวนคืน"),condition=text(l.condition).toUpperCase(),it=by[sku];if(!it)throw new ApiError("SKU_NOT_IN_ORDER",`สินค้า ${sku} ไม่อยู่ในออเดอร์`);if(!["GOOD","CHECK","DAMAGED"].includes(condition))throw new ApiError("INVALID_VALUE","สภาพสินค้าคืนไม่ถูกต้อง");const remain=n(it.quantity)-n(it.returned_qty)-(used[sku]||0);if(qty<1||qty>remain)throw new ApiError("RETURN_EXCEEDS",`จำนวนคืน ${sku} เกินยอดที่คืนได้อีก ${remain}`);used[sku]=(used[sku]||0)+qty;const name=it.product_name,reason=condition==="GOOD"?"สภาพดี พร้อมขาย":condition==="CHECK"?"ชำรุด รอตรวจสอบ":"เสียหาย ขายไม่ได้",base={sku,product_name:name,reference_id:doc,channel_id:channelId,reason:order.external_order_id,note,user_name:user.name};moves.push({...base,stock_status:condition==="GOOD"?"AVAILABLE":"INSPECTION",delta:qty,transaction_type:"RETURN",sub_type:condition});if(condition==="DAMAGED")moves.push({...base,stock_status:"INSPECTION",delta:-qty,transaction_type:"WRITE_OFF",sub_type:"RETURN_DAMAGED",reason:"ลูกค้าคืนสภาพเสียหาย"});appendGroups.push({table:"wms_returns",rows:[{return_id:`${doc}-${i+1}`,return_doc_no:doc,return_type:"CUSTOMER",internal_order_id:order.internal_order_id,channel_id:channelId,external_order_id:order.external_order_id,sku,product_name:name,quantity:qty,condition,from_status:"",supplier:"",reference_no:"",reason,note,user_id:user.id,user_name:user.name,event_at:eventAt,operation_id:"PENDING"}]});out.push({sku,name,qty,condition,conditionLabel:reason});}
+      let complete=true;for(const it of items||[]){const qty=n(it.returned_qty)+(used[it.sku]||0);if(used[it.sku])upserts.push({table:"order_items",keyColumn:"order_item_id",row:{...it,returned_qty:qty}});if(qty<n(it.quantity))complete=false;}upserts.push({table:"orders",keyColumn:"internal_order_id",row:{...order,order_status:complete?"RETURNED_FULL":"RETURNED_PARTIAL"}});result={message:"รับคืนสินค้าเรียบร้อย",docNo:doc,internalOrderId:order.internal_order_id,orderNo:order.external_order_id,lines:out};
+    }
+  } else {
+    throw new ApiError("ACTION_NOT_MIGRATED", "คำสั่งนี้ยังไม่ได้ย้ายจาก Apps Script", 501);
+  }
+  counterKeys=[];
+  if (audits.length) {
+    const group=auditGroup("PENDING",eventAt,user,audits);
+    if (group) appendGroups.push(group);
+  }
+  const committed=await commitWritePlan(db,requestId,action,user,counterKeys,appendGroups,upserts,moves,result,eventAt,reservation);
+  return committed;
 }
 
 async function expenseAction(db: ReturnType<typeof serviceClient>, action: string, p: Row, user: WmsUser): Promise<unknown> {
@@ -449,9 +861,18 @@ Deno.serve(async (req: Request) => {
     const user = await getOrRegisterUser(db, claims);
     if (action === "bootstrap") return response({ ok: true, data: await bootstrap(db, user), replay: false }, 200, origin);
     const payload = body.payload && typeof body.payload === "object" && !Array.isArray(body.payload) ? body.payload : {};
-    const data = action.startsWith("finance.expenses.")
-      ? await expenseAction(db, action, payload, user)
-      : await readAction(db, action, payload, user);
+    const writeActions = new Set(["product.save","stock.in","order.create","order.cancel","return.customer","return.supplier",
+      "writeoff","transfer","adjust","admin.channel.save","admin.user.save","admin.setting.save","finance.payment.save",
+      "finance.cost.save","product.price.save","pos.sale"]);
+    if (action.startsWith("finance.expenses.")) {
+      const data=await expenseAction(db,action,payload,user);
+      return response({ok:true,data,replay:false},200,origin);
+    }
+    if (writeActions.has(action)) {
+      const result=await writeAction(db,action,payload,user,text(body.requestId));
+      return response({ok:true,data:result.data,replay:!!result.replay},200,origin);
+    }
+    const data=await readAction(db,action,payload,user);
     return response({ ok: true, data, replay: false }, 200, origin);
   } catch (err) {
     if (err instanceof ApiError) {
