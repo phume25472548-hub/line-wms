@@ -2680,10 +2680,10 @@
       Api.read('admin.users', {}).then(function (d) {
         clear(body);
         append(body, el('div', { class: 'hint' }, _t('พนักงานใหม่ให้เปิดเมนูคลังสินค้าใน LINE หนึ่งครั้ง แล้วชื่อจะขึ้นที่นี่ในสถานะ "รออนุมัติ"')));
-        d.users.sort(function (a, b) { return (a.active ? 1 : 0) - (b.active ? 1 : 0); }).forEach(function (u) {
+        d.users.sort(function (a, b) { return (a.status === 'PENDING' ? 0 : 1) - (b.status === 'PENDING' ? 0 : 1); }).forEach(function (u) {
           append(body, el('button', { class: 'list-btn', onclick: function () { userForm(u).then(function (s) { if (s) reload(); }); } },
             el('div', { class: 'grow' }, el('div', { style: 'font-weight:600' }, u.name), el('div', { class: 'small muted' }, (ROLE_LABEL[u.role] || u.role) + ' · LINE: ' + (u.lineName || '-')), el('div', { class: 'small muted mono' }, u.userId)),
-            el('span', { class: 'badge ' + (u.active ? 'c-green' : 'c-amber') }, u.active ? _t('ใช้งาน') : _t('รออนุมัติ/ปิด'))));
+            el('span', { class: 'badge ' + (u.active ? 'c-green' : u.status === 'PENDING' ? 'c-amber' : 'c-gray') }, u.status === 'REJECTED' ? 'ปฏิเสธแล้ว' : u.status === 'SUSPENDED' ? 'ระงับ' : u.active ? _t('ใช้งาน') : _t('รออนุมัติ'))));
         });
       }).catch(fail);
     } else if (st.tab === 'products') {
@@ -2771,21 +2771,29 @@
     return sheet(function (close) {
       var name = el('input', { class: 'input', value: u.name });
       var role = choiceGroup([['STAFF', _t('พนักงาน'), _t('ทำรายการสต๊อกได้')], ['ADMIN', _t('ผู้ดูแลระบบ'), _t('ทำได้ทุกอย่าง')], ['VIEWER', _t('ดูอย่างเดียว'), _t('ดูยอด/รายงาน')]], u.role);
-      var active = el('input', { type: 'checkbox', checked: u.active, style: 'width:22px;height:22px' });
+      var status = u.status || (u.active ? 'APPROVED' : 'PENDING');
       var err = el('div', { class: 'err-text' });
-      var save = el('button', { class: 'btn btn-primary btn-block btn-lg' }, u.active ? _t('บันทึก') : _t('บันทึก / อนุมัติ'));
-      save.addEventListener('click', function () {
-        save.disabled = true;
-        submitWrite('admin.user.save', { userId: u.userId, name: name.value.trim(), role: role.value(), active: active.checked }, _t('บันทึกพนักงาน ') + name.value)
+      var actions = el('div', { class: 'actions' });
+      function saveStatus(next) {
+        if (next === 'REJECTED' || next === 'SUSPENDED') {
+          var msg = next === 'REJECTED' ? 'ยืนยันปฏิเสธคำขอของพนักงานคนนี้?' : 'ยืนยันระงับสิทธิ์พนักงานคนนี้?';
+          if (!window.confirm(msg)) return;
+        }
+        Array.prototype.forEach.call(actions.querySelectorAll('button'), function (b) { b.disabled = true; });
+        err.textContent = '';
+        submitWrite('admin.user.save', { userId: u.userId, name: name.value.trim(), role: role.value(), active: next === 'APPROVED', status: next }, _t('บันทึกพนักงาน ') + name.value)
           .then(function (d) { if (d) { toast(I18N.srv(d.message, 'บันทึกเรียบร้อย'), 'ok'); close(true); } else close(false); })
-          .catch(function (e) { save.disabled = false; err.textContent = e.message; });
-      });
-      if (!u.active) active.checked = true;
+          .catch(function (e) { Array.prototype.forEach.call(actions.querySelectorAll('button'), function (b) { b.disabled = false; }); err.textContent = e.message; });
+      }
+      append(actions, el('button', { class: 'btn btn-primary btn-block btn-lg', onclick: function () { saveStatus('APPROVED'); } }, status === 'APPROVED' ? 'บันทึก / เปิดใช้งาน' : 'อนุมัติให้ใช้งาน'));
+      if (status === 'PENDING') append(actions, el('button', { class: 'btn btn-outline btn-block', style: 'color:var(--danger)', onclick: function () { saveStatus('REJECTED'); } }, 'ปฏิเสธคำขอ'));
+      if (status === 'APPROVED') append(actions, el('button', { class: 'btn btn-outline btn-block', onclick: function () { saveStatus('SUSPENDED'); } }, 'ระงับสิทธิ์'));
+      if (status === 'REJECTED' || status === 'SUSPENDED') append(actions, el('div', { class: 'hint' }, 'บัญชีนี้ไม่สามารถเข้าใช้งานได้ จนกว่าจะอนุมัติอีกครั้ง'));
       return [el('h2', null, _t('ข้อมูลพนักงาน')), el('div', { class: 'small muted mono' }, u.userId),
         el('div', { class: 'field' }, el('label', null, _t('ชื่อที่แสดงในประวัติ')), name),
         el('div', { class: 'field' }, el('div', { class: 'label' }, _t('บทบาท')), role),
-        el('label', { class: 'row' }, active, _t('อนุญาตให้ใช้งาน')), err, save,
-        el('button', { class: 'btn btn-outline btn-block', onclick: function () { close(false); } }, _t('ยกเลิก'))];
+        el('div', { class: 'hint' }, 'สถานะปัจจุบัน: ' + ({PENDING:'รออนุมัติ',APPROVED:'อนุมัติแล้ว',REJECTED:'ปฏิเสธแล้ว',SUSPENDED:'ระงับสิทธิ์'}[status] || status)),
+        err, actions, el('button', { class: 'btn btn-outline btn-block', onclick: function () { close(false); } }, _t('ยกเลิก'))];
     });
   }
 
@@ -2877,7 +2885,7 @@
         viewMessage(app, { title: _t('รอผู้ดูแลอนุมัติ'), message: _t('ระบบลงทะเบียนชื่อ LINE ของคุณ') + (e.details && e.details.name ? ' (' + e.details.name + ')' : '') + _t(' แล้ว\nกรุณาแจ้งผู้ดูแลระบบให้อนุมัติในเมนู ตั้งค่าระบบ > พนักงาน'), code: e.details && e.details.userId, codeLabel: _t('รหัสผู้ใช้ LINE ของคุณ'), pending: true });
         return;
       }
-      viewMessage(app, { title: _t('เปิดระบบไม่สำเร็จ'), message: (e && e.message) || String(e), kind: 'error' });
+      viewMessage(app, { title: e && e.code === 'USER_BLOCKED' ? 'บัญชีไม่ได้รับอนุญาต' : _t('เปิดระบบไม่สำเร็จ'), message: (e && e.message) || String(e), kind: 'error' });
     });
   }
 
