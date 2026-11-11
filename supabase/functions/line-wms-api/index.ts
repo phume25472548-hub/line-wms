@@ -849,8 +849,8 @@ Deno.serve(async (req: Request) => {
   if (req.method !== "POST") return response({ ok: false, error: { code: "METHOD_NOT_ALLOWED", message: "ใช้ POST เท่านั้น" } }, 405, origin);
 
   try {
-    const text = await req.text();
-    const body = JSON.parse(text || "{}");
+    const rawBody = await req.text();
+    const body = JSON.parse(rawBody || "{}");
     if (!body || typeof body !== "object" || Array.isArray(body)) {
       throw new ApiError("BAD_REQUEST", "รูปแบบคำขอไม่ถูกต้อง");
     }
