@@ -90,7 +90,7 @@ async function verifyLineIdToken(idToken: unknown) {
 
 async function getOrRegisterUser(db: ReturnType<typeof serviceClient>, claims: { id: string; name: string; picture: string }) {
   const { data: existing, error: readError } = await db.from("wms_users")
-    .select("line_user_id,name,role,active,line_display_name")
+    .select("line_user_id,name,role,active,line_display_name,approval_status")
     .eq("line_user_id", claims.id)
     .maybeSingle();
   if (readError) throw new ApiError("DATABASE_ERROR", "อ่านข้อมูลผู้ใช้ไม่สำเร็จ", 500);
@@ -104,6 +104,7 @@ async function getOrRegisterUser(db: ReturnType<typeof serviceClient>, claims: {
       name: displayName,
       role: "STAFF",
       active: false,
+      approval_status: "PENDING",
       created_at: now,
       line_display_name: displayName,
       last_login_at: now,
@@ -130,6 +131,8 @@ async function getOrRegisterUser(db: ReturnType<typeof serviceClient>, claims: {
   }
 
   if (!user.active) {
+    const status = user.approval_status || "PENDING";
+    if (status === "REJECTED" || status === "SUSPENDED") throw new ApiError("USER_BLOCKED", status === "REJECTED" ? "คำขอใช้งานถูกปฏิเสธ กรุณาติดต่อผู้ดูแลระบบ" : "บัญชีถูกระงับ กรุณาติดต่อผู้ดูแลระบบ", 403);
     throw new ApiError("USER_PENDING", "บัญชีของคุณยังไม่ได้รับอนุมัติ กรุณาแจ้งผู้ดูแลระบบ", 403,
       { userId: claims.id, name: user.name || claims.name });
   }
@@ -328,7 +331,7 @@ async function readAction(db: ReturnType<typeof serviceClient>, action: string, 
   if (action === "users.options" || action === "admin.users") {
     const { data, error } = await db.from("wms_users").select("line_user_id,name,role,active,created_at,line_display_name").order("name");
     if (error) throw new ApiError("DATABASE_ERROR", "โหลดรายชื่อผู้ใช้ไม่สำเร็จ", 500);
-    const users = (data || []).map((u: Row) => action === "users.options" ? { id:u.line_user_id,name:u.name } : { userId:u.line_user_id,name:u.name,role:u.role,active:!!u.active,createdAt:u.created_at,lineName:u.line_display_name });
+    const users = (data || []).map((u: Row) => action === "users.options" ? { id:u.line_user_id,name:u.name } : { userId:u.line_user_id,name:u.name,role:u.role,active:!!u.active,status:u.approval_status || (u.active ? "APPROVED" : "PENDING"),createdAt:u.created_at,lineName:u.line_display_name });
     return action === "users.options" ? { users } : { users };
   }
   if (action === "admin.settings") {
@@ -690,14 +693,16 @@ async function writeAction(db: ReturnType<typeof serviceClient>, action: string,
     if(!existing)throw new ApiError("USER_NOT_FOUND","ไม่พบผู้ใช้");
     const name=writeText(p.name,60,"ชื่อพนักงาน",true),role=text(p.role).toUpperCase();
     if(!new Set(["ADMIN","STAFF","VIEWER"]).has(role))throw new ApiError("INVALID_VALUE","บทบาทไม่ถูกต้อง");
-    const active=!!p.active;
+    const status=text(p.status || (p.active ? "APPROVED" : "SUSPENDED")).toUpperCase();
+    if(!new Set(["PENDING","APPROVED","REJECTED","SUSPENDED"]).has(status)) throw new ApiError("INVALID_VALUE","สถานะพนักงานไม่ถูกต้อง");
+    const active=status==="APPROVED";
     if(!(role==="ADMIN"&&active)){
       const {count,error:countError}=await db.from("wms_users").select("line_user_id",{count:"exact",head:true})
         .eq("role","ADMIN").eq("active",true).neq("line_user_id",userId);
       if(countError)throw new ApiError("DATABASE_ERROR","ตรวจสอบผู้ดูแลระบบไม่สำเร็จ",500);
       if(!count)throw new ApiError("LAST_ADMIN","ต้องมี ADMIN ที่ใช้งานอยู่อย่างน้อย 1 คน");
     }
-    const fields={name,role,active};
+    const fields={name,role,active,approval_status:status};
     upserts.push({table:"wms_users",keyColumn:"line_user_id",row:{...existing,line_user_id:userId,...fields}});
     audits.push({action:"USER_UPDATE",target:userId,details:{before:{name:existing.name,role:existing.role,active:existing.active},after:fields}});
     result={message:`บันทึกข้อมูลพนักงาน ${name} เรียบร้อย`};
