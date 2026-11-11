@@ -199,6 +199,7 @@
     fresh: function () {
       try { var d = liff.getDecodedIDToken(); return !!(d && d.exp * 1000 > Date.now() + 30000); } catch (e) { return false; }
     },
+    // LIFF inside LINE uses the currently signed-in LINE account; WMS cannot switch it.
     relogin: function () {
       var n = Number(sessionStorage.getItem('wms_relogin') || 0);
       if (n >= 2) {
@@ -308,7 +309,9 @@
 
   /** รายการที่กำลังบันทึก — เก็บไว้ในเครื่องจนกว่าจะรู้ผลแน่ชัด */
   var Pending = {
-    key: 'wms_pending_write',
+    // Never replay a previous employee's uncertain write under another LINE account.
+    key: 'wms_pending_write_unscoped_legacy',
+    useAccount: function (id) { this.key = 'wms_pending_write:' + encodeURIComponent(id); },
     get: function () { try { return JSON.parse(localStorage.getItem(this.key) || 'null'); } catch (e) { return null; } },
     set: function (v) { try { localStorage.setItem(this.key, JSON.stringify(v)); } catch (e) { /* โหมดส่วนตัว */ } },
     clear: function () { try { localStorage.removeItem(this.key); } catch (e) { /* ignore */ } }
@@ -905,6 +908,7 @@
         el('div', { class: 'ic ' + t[4] }, icon(t[3])), el('div', null, el('div', { class: 't' }, t[1]), el('div', { class: 's' }, t[2]))));
     });
     append(pg, grid);
+    append(pg, el('button', { class: 'btn btn-outline btn-block', style: 'margin-top:12px', onclick: function () { location.reload(); } }, icon('refresh'), _t('ตรวจสอบบัญชีและสิทธิ์อีกครั้ง')));
     append(pg, el('div', { class: 'small muted', style: 'text-align:center;margin-top:8px' }, (State.app.name || 'LINE WMS') + ' v' + (State.app.version || '')));
     app.appendChild(pg);
   }
@@ -2821,7 +2825,8 @@
         el('button', { class: 'btn btn-outline btn-block', style: 'margin-top:10px', onclick: function () {
           try { navigator.clipboard.writeText(m.code).then(function () { toast(_t('คัดลอกแล้ว'), 'ok'); }); } catch (e) { toast(_t('คัดลอกไม่ได้ กรุณาจดรหัส'), 'error'); }
         } }, _t('คัดลอกรหัส'))) : null,
-      el('button', { class: 'btn btn-primary btn-block', onclick: function () { location.reload(); } }, icon('refresh'), _t('ลองใหม่'))));
+      el('button', { class: 'btn btn-primary btn-block', onclick: function () { location.reload(); } }, icon('refresh'), m.pending ? _t('ตรวจสอบสถานะอีกครั้ง') : _t('ลองใหม่')),
+      el('div', { class: 'small muted', style: 'max-width:320px;text-align:center' }, _t('ระบบใช้บัญชี LINE ที่กำลังเข้าสู่ระบบบนเครื่องนี้ หากเป็นบัญชีคนละคนให้เปิด WMS จาก LINE ของพนักงานคนนั้น'))));
   }
 
   /* ================================================================ */
@@ -2846,11 +2851,15 @@
 
   function boot() {
     var app = $('#app');
+    State.user = null; State.perms = {}; State.settings = {}; State.channels = []; State.app = {};
     if (!configured()) {
       viewMessage(app, { title: _t('ยังไม่ได้ตั้งค่าการเชื่อมต่อ'), message: _t('ผู้ดูแลระบบต้องแก้ไฟล์ config.js ใส่ LIFF_ID และ API_URL ก่อนใช้งาน (ดูคู่มือติดตั้ง ขั้นตอนที่ 7)'), kind: 'error' });
       return;
     }
     Auth.init().then(function () {
+      var identity = liff.getDecodedIDToken();
+      if (!identity || !identity.sub) throw appErr('AUTH_EXPIRED', _t('ไม่สามารถยืนยันบัญชี LINE ได้'));
+      Pending.useAccount(identity.sub);
       return Api.raw('bootstrap', {});
     }).then(function (j) {
       sessionStorage.removeItem('wms_relogin');
@@ -2865,7 +2874,7 @@
     }).catch(function (e) {
       if (e && e.code === 'AUTH_EXPIRED') return Auth.relogin();
       if (e && e.code === 'USER_PENDING') {
-        viewMessage(app, { title: _t('รอผู้ดูแลอนุมัติ'), message: _t('ระบบลงทะเบียนชื่อ LINE ของคุณ') + (e.details && e.details.name ? ' (' + e.details.name + ')' : '') + _t(' แล้ว\nกรุณาแจ้งผู้ดูแลระบบให้อนุมัติในเมนู ตั้งค่าระบบ > พนักงาน'), code: e.details && e.details.userId, codeLabel: _t('รหัสผู้ใช้ LINE ของคุณ') });
+        viewMessage(app, { title: _t('รอผู้ดูแลอนุมัติ'), message: _t('ระบบลงทะเบียนชื่อ LINE ของคุณ') + (e.details && e.details.name ? ' (' + e.details.name + ')' : '') + _t(' แล้ว\nกรุณาแจ้งผู้ดูแลระบบให้อนุมัติในเมนู ตั้งค่าระบบ > พนักงาน'), code: e.details && e.details.userId, codeLabel: _t('รหัสผู้ใช้ LINE ของคุณ'), pending: true });
         return;
       }
       viewMessage(app, { title: _t('เปิดระบบไม่สำเร็จ'), message: (e && e.message) || String(e), kind: 'error' });
