@@ -329,7 +329,7 @@ async function readAction(db: ReturnType<typeof serviceClient>, action: string, 
       byChannel:Object.values(by), recent:(tx||[]).slice(0,15).map(txView) };
   }
   if (action === "users.options" || action === "admin.users") {
-    const { data, error } = await db.from("wms_users").select("line_user_id,name,role,active,created_at,line_display_name").order("name");
+    const { data, error } = await db.from("wms_users").select("line_user_id,name,role,active,approval_status,created_at,line_display_name").order("name");
     if (error) throw new ApiError("DATABASE_ERROR", "โหลดรายชื่อผู้ใช้ไม่สำเร็จ", 500);
     const users = (data || []).map((u: Row) => action === "users.options" ? { id:u.line_user_id,name:u.name } : { userId:u.line_user_id,name:u.name,role:u.role,active:!!u.active,status:u.approval_status || (u.active ? "APPROVED" : "PENDING"),createdAt:u.created_at,lineName:u.line_display_name });
     return action === "users.options" ? { users } : { users };
