@@ -848,6 +848,104 @@ async function expenseAction(db: ReturnType<typeof serviceClient>, action: strin
   throw new ApiError("ACTION_NOT_MIGRATED", "คำสั่งนี้ยังไม่ได้ย้ายจาก Apps Script", 501);
 }
 
+function desktopSecret() {
+  return Array.from(crypto.getRandomValues(new Uint8Array(32)), byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function desktopHash(secret: unknown) {
+  if (typeof secret !== "string" || !/^[a-f0-9]{64}$/.test(secret)) {
+    throw new ApiError("DESKTOP_AUTH_REQUIRED", "กรุณาสแกน QR ใหม่", 401);
+  }
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(secret));
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function checkDesktopDb(error: unknown) {
+  if (error) throw new ApiError("DATABASE_ERROR", "ระบบยืนยันตัวตนขัดข้อง", 500);
+}
+
+async function desktopClaims(db: ReturnType<typeof serviceClient>, token: unknown) {
+  const hash = await desktopHash(token);
+  const now = new Date().toISOString();
+  const { data, error } = await db.from("wms_desktop_sessions").select("line_user_id")
+    .eq("token_hash", hash).gt("idle_until", now).gt("expires_at", now).maybeSingle();
+  checkDesktopDb(error);
+  if (!data) throw new ApiError("DESKTOP_AUTH_REQUIRED", "กรุณาสแกน QR ใหม่", 401);
+  return { id: data.line_user_id, name: "", picture: "" };
+}
+
+// Kept disabled until the trusted LINE approval flow is connected.
+async function desktopAction(db: ReturnType<typeof serviceClient>, action: string, body: Record<string, unknown>) {
+  if (action === "desktop.create") {
+    const scan = desktopSecret();
+    const poll = desktopSecret();
+    const { error } = await db.from("wms_desktop_challenges")
+      .insert({ scan_hash: await desktopHash(scan), poll_hash: await desktopHash(poll) });
+    checkDesktopDb(error);
+    return { scan, poll };
+  }
+  if (action === "desktop.redeem") {
+    const token = desktopSecret();
+    const { data, error } = await db.rpc("wms_redeem_desktop_challenge", {
+      p_poll_hash: await desktopHash(body.poll), p_token_hash: await desktopHash(token),
+    });
+    checkDesktopDb(error);
+    return { token: data ? token : null };
+  }
+  const hash = await desktopHash(body.desktopToken);
+  if (action === "desktop.logout") {
+    const { error } = await db.from("wms_desktop_sessions").delete().eq("token_hash", hash);
+    checkDesktopDb(error);
+    return {};
+  }
+  if (action === "desktop.activity") {
+    await getOrRegisterUser(db, await desktopClaims(db, body.desktopToken));
+    const { data, error } = await db.rpc("wms_desktop_activity", { p_token_hash: hash });
+    checkDesktopDb(error);
+    if (!data) throw new ApiError("DESKTOP_AUTH_REQUIRED", "กรุณาสแกน QR ใหม่", 401);
+    return {};
+  }
+  throw new ApiError("BAD_REQUEST", "คำสั่งไม่ถูกต้อง", 400);
+}
+
+async function confirmDesktopFromLine(db: ReturnType<typeof serviceClient>, raw: string, signature: string) {
+  const secret = Deno.env.get("WMS_LINE_MESSAGING_CHANNEL_SECRET");
+  if (!secret) throw new ApiError("SERVER_CONFIG", "ยังไม่ได้ตั้งค่า LINE Messaging API", 503);
+
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey("raw", encoder.encode(secret),
+    { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
+  let bytes: Uint8Array;
+  try {
+    bytes = Uint8Array.from(atob(signature), character => character.charCodeAt(0));
+  } catch {
+    throw new ApiError("AUTH_INVALID", "ลายเซ็น LINE ไม่ถูกต้อง", 401);
+  }
+  if (!await crypto.subtle.verify("HMAC", key, bytes, encoder.encode(raw))) {
+    throw new ApiError("AUTH_INVALID", "ลายเซ็น LINE ไม่ถูกต้อง", 401);
+  }
+
+  const body = JSON.parse(raw);
+  if (!Array.isArray(body.events)) throw new ApiError("BAD_REQUEST", "รูปแบบ webhook ไม่ถูกต้อง");
+  for (const event of body.events) {
+    if (event.type !== "message" || event.source?.type !== "user" || event.message?.type !== "text") continue;
+    const scan = /^WMS LOGIN ([a-f0-9]{64})$/.exec(event.message.text)?.[1];
+    const id = event.source.userId;
+    if (!scan || typeof id !== "string" || !/^U[a-f0-9]{32}$/.test(id)) continue;
+
+    const { data: user, error: lookupError } = await db.from("wms_users")
+      .select("role,active,approval_status").eq("line_user_id", id).maybeSingle();
+    checkDesktopDb(lookupError);
+    if (!user?.active || (user.approval_status && user.approval_status !== "APPROVED") ||
+        !["ADMIN", "STAFF", "VIEWER"].includes(String(user.role).toUpperCase())) continue;
+
+    const { error } = await db.from("wms_desktop_challenges").update({ line_user_id: id })
+      .eq("scan_hash", await desktopHash(scan)).is("line_user_id", null)
+      .gt("expires_at", new Date().toISOString());
+    checkDesktopDb(error);
+  }
+}
+
 Deno.serve(async (req: Request) => {
   const origin = req.headers.get("origin");
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders(origin) });
@@ -855,6 +953,12 @@ Deno.serve(async (req: Request) => {
 
   try {
     const rawBody = await req.text();
+    const desktopEnabled = Deno.env.get("WMS_DESKTOP_AUTH_ENABLED") === "true";
+    if (new URL(req.url).pathname.endsWith("/desktop-line-webhook")) {
+      if (!desktopEnabled) return response({ ok: false }, 404, origin);
+      await confirmDesktopFromLine(serviceClient(), rawBody, req.headers.get("x-line-signature") || "");
+      return response({ ok: true }, 200, origin);
+    }
     const body = JSON.parse(rawBody || "{}");
     if (!body || typeof body !== "object" || Array.isArray(body)) {
       throw new ApiError("BAD_REQUEST", "รูปแบบคำขอไม่ถูกต้อง");
@@ -862,7 +966,12 @@ Deno.serve(async (req: Request) => {
     const action = String(body.action || "");
     if (action === "health") return response({ ok: true, data: { app: APP_NAME, backend: "supabase", ready: true } }, 200, origin);
     const db = serviceClient();
-    const claims = await verifyLineIdToken(body.idToken);
+    if (desktopEnabled && action.startsWith("desktop.")) {
+      return response({ ok: true, data: await desktopAction(db, action, body) }, 200, origin);
+    }
+    const claims = desktopEnabled && body.desktopToken !== undefined
+      ? await desktopClaims(db, body.desktopToken)
+      : await verifyLineIdToken(body.idToken);
     const user = await getOrRegisterUser(db, claims);
     if (action === "bootstrap") return response({ ok: true, data: await bootstrap(db, user), replay: false }, 200, origin);
     const payload = body.payload && typeof body.payload === "object" && !Array.isArray(body.payload) ? body.payload : {};
