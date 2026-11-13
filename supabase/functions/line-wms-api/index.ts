@@ -848,6 +848,66 @@ async function expenseAction(db: ReturnType<typeof serviceClient>, action: strin
   throw new ApiError("ACTION_NOT_MIGRATED", "คำสั่งนี้ยังไม่ได้ย้ายจาก Apps Script", 501);
 }
 
+function desktopSecret() {
+  return Array.from(crypto.getRandomValues(new Uint8Array(32)), byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function desktopHash(secret: unknown) {
+  if (typeof secret !== "string" || !/^[a-f0-9]{64}$/.test(secret)) {
+    throw new ApiError("DESKTOP_AUTH_REQUIRED", "กรุณาสแกน QR ใหม่", 401);
+  }
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(secret));
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function checkDesktopDb(error: unknown) {
+  if (error) throw new ApiError("DATABASE_ERROR", "ระบบยืนยันตัวตนขัดข้อง", 500);
+}
+
+async function desktopClaims(db: ReturnType<typeof serviceClient>, token: unknown) {
+  const hash = await desktopHash(token);
+  const now = new Date().toISOString();
+  const { data, error } = await db.from("wms_desktop_sessions").select("line_user_id")
+    .eq("token_hash", hash).gt("idle_until", now).gt("expires_at", now).maybeSingle();
+  checkDesktopDb(error);
+  if (!data) throw new ApiError("DESKTOP_AUTH_REQUIRED", "กรุณาสแกน QR ใหม่", 401);
+  return { id: data.line_user_id, name: "", picture: "" };
+}
+
+// Kept disabled until the trusted LINE approval flow is connected.
+async function desktopAction(db: ReturnType<typeof serviceClient>, action: string, body: Record<string, unknown>) {
+  if (action === "desktop.create") {
+    const scan = desktopSecret();
+    const poll = desktopSecret();
+    const { error } = await db.from("wms_desktop_challenges")
+      .insert({ scan_hash: await desktopHash(scan), poll_hash: await desktopHash(poll) });
+    checkDesktopDb(error);
+    return { scan, poll };
+  }
+  if (action === "desktop.redeem") {
+    const token = desktopSecret();
+    const { data, error } = await db.rpc("wms_redeem_desktop_challenge", {
+      p_poll_hash: await desktopHash(body.poll), p_token_hash: await desktopHash(token),
+    });
+    checkDesktopDb(error);
+    return { token: data ? token : null };
+  }
+  const hash = await desktopHash(body.desktopToken);
+  if (action === "desktop.logout") {
+    const { error } = await db.from("wms_desktop_sessions").delete().eq("token_hash", hash);
+    checkDesktopDb(error);
+    return {};
+  }
+  if (action === "desktop.activity") {
+    await getOrRegisterUser(db, await desktopClaims(db, body.desktopToken));
+    const { data, error } = await db.rpc("wms_desktop_activity", { p_token_hash: hash });
+    checkDesktopDb(error);
+    if (!data) throw new ApiError("DESKTOP_AUTH_REQUIRED", "กรุณาสแกน QR ใหม่", 401);
+    return {};
+  }
+  throw new ApiError("BAD_REQUEST", "คำสั่งไม่ถูกต้อง", 400);
+}
+
 Deno.serve(async (req: Request) => {
   const origin = req.headers.get("origin");
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders(origin) });
@@ -862,7 +922,13 @@ Deno.serve(async (req: Request) => {
     const action = String(body.action || "");
     if (action === "health") return response({ ok: true, data: { app: APP_NAME, backend: "supabase", ready: true } }, 200, origin);
     const db = serviceClient();
-    const claims = await verifyLineIdToken(body.idToken);
+    const desktopEnabled = Deno.env.get("WMS_DESKTOP_AUTH_ENABLED") === "true";
+    if (desktopEnabled && action.startsWith("desktop.")) {
+      return response({ ok: true, data: await desktopAction(db, action, body) }, 200, origin);
+    }
+    const claims = desktopEnabled && body.desktopToken !== undefined
+      ? await desktopClaims(db, body.desktopToken)
+      : await verifyLineIdToken(body.idToken);
     const user = await getOrRegisterUser(db, claims);
     if (action === "bootstrap") return response({ ok: true, data: await bootstrap(db, user), replay: false }, 200, origin);
     const payload = body.payload && typeof body.payload === "object" && !Array.isArray(body.payload) ? body.payload : {};
