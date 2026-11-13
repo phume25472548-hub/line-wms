@@ -185,6 +185,57 @@
   /* ================================================================ */
   /* Auth (LIFF)                                                        */
   /* ================================================================ */
+  var desktopToken = null;
+  var desktopMode = false;
+  var desktopTimer;
+  var lastDesktopActivity = 0;
+
+  function lockDesktop() {
+    if (!desktopToken) return;
+    Api.raw('desktop.logout', {}, null, {}, true).catch(function () {});
+    desktopToken = null;
+    location.reload();
+  }
+
+  function startDesktopActivity() {
+    clearTimeout(desktopTimer);
+    desktopTimer = setTimeout(lockDesktop, 60000);
+  }
+
+  function desktopActivity(event) {
+    if (!desktopToken || !event.isTrusted || Date.now() - lastDesktopActivity < 5000) return;
+    lastDesktopActivity = Date.now();
+    Api.raw('desktop.activity', {}, null, {}, true).then(startDesktopActivity, lockDesktop);
+  }
+
+  function desktopLogin(root) {
+    return Api.raw('desktop.create', {}, null, {}, true).then(function (result) {
+      viewMessage(root, { title: _t('สแกน QR เพื่อเข้า LINE WMS'), message: _t('สแกนด้วย LINE มือถือ แล้วกดส่งข้อความยืนยันในแชตของ LINE WMS') });
+      var destination = 'https://line.me/R/oaMessage/' + encodeURIComponent(C.DESKTOP_LINE_OA_ID) + '/?' + encodeURIComponent('WMS LOGIN ' + result.data.scan);
+      var qr = window.qrcode(0, 'M');
+      qr.addData(destination);
+      qr.make();
+      var img = el('img', { src: qr.createDataURL(5, 20), alt: _t('QR สำหรับเข้าสู่ระบบ LINE WMS') });
+      root.appendChild(img);
+      var deadline = Date.now() + 60000;
+      function poll() {
+        if (Date.now() >= deadline) return desktopLogin(root);
+        return Api.raw('desktop.redeem', {}, null, { poll: result.data.poll }, true).then(function (reply) {
+          if (reply.data.token) {
+            desktopToken = reply.data.token;
+            startDesktopActivity();
+            return;
+          }
+          return new Promise(function (resolve) { setTimeout(resolve, 2000); }).then(poll);
+        });
+      }
+      return poll();
+    });
+  }
+
+  document.addEventListener('pointerdown', desktopActivity, true);
+  document.addEventListener('keydown', desktopActivity, true);
+
   var Auth = {
     init: function () {
       if (!window.liff) return Promise.reject(appErr('LIFF_MISSING', _t('โหลด LINE LIFF SDK ไม่สำเร็จ กรุณาตรวจสอบอินเทอร์เน็ตแล้วเปิดใหม่')));
@@ -249,10 +300,11 @@
     return e;
   }
   var Api = {
-    raw: function (action, payload, requestId) {
+    raw: function (action, payload, requestId, fields, authAction) {
+      if (desktopMode && !desktopToken && !authAction) return Promise.reject(appErr('DESKTOP_AUTH_REQUIRED', _t('กรุณาสแกน QR ใหม่')));
       var ctl = window.AbortController ? new AbortController() : null;
       var timer = setTimeout(function () { if (ctl) ctl.abort(); }, C.REQUEST_TIMEOUT_MS || 30000);
-      var body = JSON.stringify({ action: action, idToken: Auth.token(), requestId: requestId, payload: payload || {} });
+      var body = JSON.stringify(Object.assign({ action: action, idToken: desktopMode ? undefined : Auth.token(), desktopToken: desktopToken || undefined, requestId: requestId, payload: payload || {} }, fields));
       // ไม่ตั้ง Content-Type เอง → เบราว์เซอร์ใช้ text/plain = ไม่มี CORS preflight (Apps Script รองรับ)
       return fetch(C.API_URL, { method: 'POST', body: body, redirect: 'follow', signal: ctl ? ctl.signal : undefined, cache: 'no-store' })
         .then(function (res) { return res.text(); })
@@ -260,6 +312,7 @@
           clearTimeout(timer);
           var json;
           try { json = JSON.parse(text); } catch (e) { throw appErr('BAD_RESPONSE', _t('เซิร์ฟเวอร์ตอบกลับไม่ถูกต้อง'), null, { network: true }); }
+          if (!json.ok && desktopMode && json.error.code === 'DESKTOP_AUTH_REQUIRED') lockDesktop();
           if (!json.ok) throw appErr(json.error.code, I18N.err(json.error.code, json.error.message), json.error.details, { serverMessage: json.error.message });
           return json;
         }, function (err) {
@@ -306,6 +359,7 @@
 
   /** เรียก Supabase สำหรับงานที่ย้ายแยกเข้ามาแล้ว โดยไม่เปลี่ยน API งานคลังเดิม */
   function supabaseAction(action, payload) {
+    if (desktopMode) return Api.read(action, payload);
     if (!C.SUPABASE_API_URL || !C.SUPABASE_PUBLISHABLE_KEY) {
       return Promise.reject(appErr('SUPABASE_CONFIG', _t('ยังไม่ได้ตั้งค่า Supabase')));
     }
@@ -2891,14 +2945,17 @@
       viewMessage(app, { title: _t('ยังไม่ได้ตั้งค่าการเชื่อมต่อ'), message: _t('ผู้ดูแลระบบต้องแก้ไฟล์ config.js ใส่ LIFF_ID และ API_URL ก่อนใช้งาน (ดูคู่มือติดตั้ง ขั้นตอนที่ 7)'), kind: 'error' });
       return;
     }
-    Auth.init().then(function () {
+    desktopMode = Boolean(C.DESKTOP_LINE_OA_ID && !/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent)
+      && !(navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1));
+    var login = desktopMode ? desktopLogin(app) : Auth.init().then(function () {
       var identity = liff.getDecodedIDToken();
       if (!identity || !identity.sub) throw appErr('AUTH_EXPIRED', _t('ไม่สามารถยืนยันบัญชี LINE ได้'));
       Pending.useAccount(identity.sub);
-      return Api.raw('bootstrap', {});
-    }).then(function (j) {
+    });
+    login.then(function () { return Api.raw('bootstrap', {}); }).then(function (j) {
       sessionStorage.removeItem('wms_relogin');
       var d = j.data;
+      if (desktopMode) Pending.useAccount(d.user.id);
       State.user = d.user; State.perms = d.perms; State.settings = d.settings; State.channels = d.channels; State.app = d.app;
       stack = [[viewHome]];
       var deep = deepLink();
@@ -2914,7 +2971,8 @@
         return;
       }
       viewMessage(app, { title: e && e.code === 'USER_BLOCKED' ? 'บัญชีไม่ได้รับอนุญาต' : _t('เปิดระบบไม่สำเร็จ'), message: (e && e.message) || String(e), kind: 'error' });
-      if (e && e.code === 'USER_BLOCKED') appendLoginRecovery(app);
+      if (desktopMode) app.appendChild(el('button', { type: 'button', class: 'btn btn-outline', onclick: function () { location.reload(); } }, _t('สร้าง QR ใหม่')));
+      else if (e && e.code === 'USER_BLOCKED') appendLoginRecovery(app);
     });
   }
 
