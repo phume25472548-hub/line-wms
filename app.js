@@ -214,29 +214,30 @@
     }
   };
 
-  // Explicit recovery for stale LINE browser credentials. No automatic infinite redirect.
+  function appendLoginRecovery(root) {
+    var panel = el('div', { class: 'actions login-recovery' });
+    panel.appendChild(el('button', { type: 'button', class: 'btn btn-outline', onclick: function () {
+      sessionStorage.removeItem('wms_relogin');
+      if (!window.liff) { location.reload(); return; }
+      if (liff.isInClient()) {
+        liff.closeWindow();
+        return;
+      }
+      try {
+        if (liff.isLoggedIn()) liff.logout();
+        location.reload();
+      } catch (error) {
+        toast(error.message || _t('กรุณาปิดหน้านี้แล้วเปิด WMS ใหม่'), 'error');
+      }
+    } }, _t('เข้าสู่ระบบใหม่')));
+    panel.appendChild(el('p', { class: 'small' }, _t('ในแอป LINE ปุ่มนี้จะปิดหน้า WMS ให้เปิดเมนูคลังสินค้าอีกครั้ง หากใช้บัญชีอื่น ให้เปิด WMS จาก LINE ของบัญชีนั้น')));
+    root.appendChild(panel);
+  }
+
   function showLoginRecovery(error) {
     var root = $('#app');
     viewMessage(root, { title: _t('เข้าสู่ระบบ LINE ไม่สำเร็จ'), message: (error && error.message) || _t('กรุณาเข้าสู่ระบบใหม่'), kind: 'error' });
-    var panel = el('div', { class: 'login-recovery' });
-    panel.style.cssText = 'display:flex;flex-wrap:wrap;gap:12px;justify-content:center;padding:16px';
-    var retry = el('button', { type: 'button' }, _t('เข้าสู่ระบบใหม่'));
-    retry.onclick = function () {
-      sessionStorage.removeItem('wms_relogin');
-      try {
-        if (window.liff && liff.isLoggedIn()) liff.logout();
-        if (window.liff && !liff.isInClient()) {
-          liff.login({ redirectUri: location.origin + location.pathname });
-        } else {
-          location.reload();
-        }
-      } catch (err) { location.reload(); }
-    };
-    panel.appendChild(retry);
-    var info = el('p', {}, _t('หากต้องการเปลี่ยนบัญชี LINE ภายในแอป LINE ต้องเปลี่ยนบัญชีในแอปก่อน แล้วเปิด WMS ใหม่'));
-    info.style.cssText = 'width:100%;text-align:center;font-size:13px';
-    panel.appendChild(info);
-    root.appendChild(panel);
+    appendLoginRecovery(root);
   }
 
   /* ================================================================ */
@@ -922,6 +923,7 @@
         u.picture ? el('img', { class: 'avatar', src: u.picture, alt: '' }) : el('div', { class: 'avatar' }, initial),
         el('div', { class: 'grow' }, el('div', { style: 'font-weight:600' }, u.name), el('span', { class: 'role-badge' }, ROLE_LABEL[u.role] || u.role)))));
     var pg = el('div', { class: 'page page-home' });
+    if (window.liff && liff.isInClient()) appendLoginRecovery(pg);
     if (Pending.get()) {
       append(pg, el('button', { class: 'banner warn', style: 'border:0;width:100%;text-align:left;cursor:pointer', onclick: function () { checkPending(true).then(function () { render(); }); } },
         icon('alert'), el('div', null, _t('มีรายการที่ยังไม่ทราบผลการบันทึก แตะเพื่อตรวจสอบ'))));
@@ -2908,9 +2910,11 @@
       if (e && (e.code === 'AUTH_EXPIRED' || e.code === 'AUTH_INVALID' || e.code === 'AUTH_REQUIRED')) return showLoginRecovery(e);
       if (e && e.code === 'USER_PENDING') {
         viewMessage(app, { title: _t('รอผู้ดูแลอนุมัติ'), message: _t('ระบบลงทะเบียนชื่อ LINE ของคุณ') + (e.details && e.details.name ? ' (' + e.details.name + ')' : '') + _t(' แล้ว\nกรุณาแจ้งผู้ดูแลระบบให้อนุมัติในเมนู ตั้งค่าระบบ > พนักงาน'), code: e.details && e.details.userId, codeLabel: _t('รหัสผู้ใช้ LINE ของคุณ'), pending: true });
+        appendLoginRecovery(app);
         return;
       }
       viewMessage(app, { title: e && e.code === 'USER_BLOCKED' ? 'บัญชีไม่ได้รับอนุญาต' : _t('เปิดระบบไม่สำเร็จ'), message: (e && e.message) || String(e), kind: 'error' });
+      if (e && e.code === 'USER_BLOCKED') appendLoginRecovery(app);
     });
   }
 
