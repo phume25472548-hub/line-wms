@@ -2945,7 +2945,7 @@
       viewMessage(app, { title: _t('ยังไม่ได้ตั้งค่าการเชื่อมต่อ'), message: _t('ผู้ดูแลระบบต้องแก้ไฟล์ config.js ใส่ LIFF_ID และ API_URL ก่อนใช้งาน (ดูคู่มือติดตั้ง ขั้นตอนที่ 7)'), kind: 'error' });
       return;
     }
-    desktopMode = Boolean(C.DESKTOP_LINE_OA_ID && !/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent)
+    desktopMode = Boolean(C.DESKTOP_QR_ENABLED && C.DESKTOP_LINE_OA_ID && !/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent)
       && !(navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1));
     var login = desktopMode ? desktopLogin(app) : Auth.init().then(function () {
       var identity = liff.getDecodedIDToken();
