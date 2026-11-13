@@ -2446,7 +2446,14 @@
     st.textContent = '@page { size: ' + size + ' portrait; margin: ' + (size === 'A4' ? '14mm 14mm 16mm' : '9mm 9mm 12mm') + '; @bottom-right { content: "หน้า " counter(page) "/" counter(pages); font-size: 8pt; color: #555; font-family: \'IBM Plex Sans Thai\', sans-serif; }' +
       (label ? ' @top-right { content: ' + JSON.stringify(String(label).replace(/[\\"]/g, '')) + '; font-size: 8pt; color: #555; font-family: \'IBM Plex Sans Thai\', sans-serif; }' : '') + ' }';
     window.__lastPrint = { size: size, at: Date.now() };
-    setTimeout(function () { try { window.print(); } catch (e) { toast('เครื่องนี้สั่งพิมพ์ไม่ได้', 'error'); } }, 60);
+    // Call print synchronously: desktop browsers may suppress delayed print dialogs.
+    // The printable DOM and @page rules have already been installed above.
+    try {
+      if (typeof window.print !== 'function') throw new Error('Printing is unavailable');
+      window.print();
+    } catch (e) {
+      toast('เปิดหน้าต่างพิมพ์ไม่ได้ กรุณาใช้ Ctrl+P (Mac: Cmd+P)', 'error');
+    }
   }
 
   /** ใน LINE บนมือถือ หน้าต่างพิมพ์มักไม่ขึ้น → เสนอเปิดในเบราว์เซอร์ */
