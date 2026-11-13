@@ -244,7 +244,7 @@
     },
     read: function (action, payload) {
       return Api.raw(action, payload).then(function (j) { return j.data; }).catch(function (e) {
-        if (e.code === 'AUTH_EXPIRED') return Auth.relogin();
+        if (e.code === 'AUTH_EXPIRED' || e.code === 'AUTH_INVALID' || e.code === 'AUTH_REQUIRED') return Auth.relogin();
         throw e;
       });
     },
@@ -2880,7 +2880,7 @@
       render();
       return checkPending(false).then(function (r) { if (r !== null) render(); });
     }).catch(function (e) {
-      if (e && e.code === 'AUTH_EXPIRED') return Auth.relogin();
+      if (e && (e.code === 'AUTH_EXPIRED' || e.code === 'AUTH_INVALID' || e.code === 'AUTH_REQUIRED')) return Auth.relogin();
       if (e && e.code === 'USER_PENDING') {
         viewMessage(app, { title: _t('รอผู้ดูแลอนุมัติ'), message: _t('ระบบลงทะเบียนชื่อ LINE ของคุณ') + (e.details && e.details.name ? ' (' + e.details.name + ')' : '') + _t(' แล้ว\nกรุณาแจ้งผู้ดูแลระบบให้อนุมัติในเมนู ตั้งค่าระบบ > พนักงาน'), code: e.details && e.details.userId, codeLabel: _t('รหัสผู้ใช้ LINE ของคุณ'), pending: true });
         return;
