@@ -2857,6 +2857,24 @@
     return C.LIFF_ID && C.API_URL && C.LIFF_ID.indexOf('YOUR_') !== 0 && C.API_URL.indexOf('YOUR_') < 0;
   }
 
+  function appendLoginReset(root) {
+    var status = el('p', { class: 'small', role: 'status' });
+    var reset = el('button', { type: 'button', class: 'btn btn-outline btn-block', onclick: function () {
+      try {
+        sessionStorage.removeItem('wms_relogin');
+        if (window.liff && liff.isInClient()) {
+          liff.closeWindow();
+          return;
+        }
+        if (window.liff && liff.isLoggedIn()) liff.logout();
+        location.replace(location.origin + location.pathname);
+      } catch (error) {
+        status.textContent = _t('รีเซ็ตไม่ได้ กรุณาปิดหน้านี้แล้วเปิด WMS จากลิงก์หลักหรือเมนูใน LINE อีกครั้ง');
+      }
+    } }, _t('รีเซ็ตการเข้าสู่ระบบ'));
+    append(root, reset, status);
+  }
+
   function boot() {
     var app = $('#app');
     State.user = null; State.perms = {}; State.settings = {}; State.channels = []; State.app = {};
@@ -2880,12 +2898,13 @@
       render();
       return checkPending(false).then(function (r) { if (r !== null) render(); });
     }).catch(function (e) {
-      if (e && e.code === 'AUTH_EXPIRED') return Auth.relogin();
       if (e && e.code === 'USER_PENDING') {
         viewMessage(app, { title: _t('รอผู้ดูแลอนุมัติ'), message: _t('ระบบลงทะเบียนชื่อ LINE ของคุณ') + (e.details && e.details.name ? ' (' + e.details.name + ')' : '') + _t(' แล้ว\nกรุณาแจ้งผู้ดูแลระบบให้อนุมัติในเมนู ตั้งค่าระบบ > พนักงาน'), code: e.details && e.details.userId, codeLabel: _t('รหัสผู้ใช้ LINE ของคุณ'), pending: true });
+        appendLoginReset(app);
         return;
       }
       viewMessage(app, { title: e && e.code === 'USER_BLOCKED' ? 'บัญชีไม่ได้รับอนุญาต' : _t('เปิดระบบไม่สำเร็จ'), message: (e && e.message) || String(e), kind: 'error' });
+      appendLoginReset(app);
     });
   }
 
