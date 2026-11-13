@@ -210,8 +210,8 @@
 
   function desktopLogin(root) {
     return Api.raw('desktop.create', {}, null, {}, true).then(function (result) {
-      viewMessage(root, { title: _t('สแกน QR เพื่อเข้า LINE WMS'), message: _t('สแกนด้วย LINE มือถือ แล้วกดส่งข้อความยืนยันในแชตของ LINE WMS') });
-      var destination = 'https://line.me/R/oaMessage/' + encodeURIComponent(C.DESKTOP_LINE_OA_ID) + '/?' + encodeURIComponent('WMS LOGIN ' + result.data.scan);
+      viewMessage(root, { title: _t('สแกน QR เพื่อเข้า LINE WMS'), message: _t('สแกนด้วย LINE มือถือ แล้วกดยืนยันบนหน้า WMS') });
+      var destination = 'https://liff.line.me/' + C.LIFF_ID + '?desktop_scan=' + encodeURIComponent(result.data.scan);
       var qr = window.qrcode(0, 'M');
       qr.addData(destination);
       qr.make();
@@ -2945,8 +2945,29 @@
       viewMessage(app, { title: _t('ยังไม่ได้ตั้งค่าการเชื่อมต่อ'), message: _t('ผู้ดูแลระบบต้องแก้ไฟล์ config.js ใส่ LIFF_ID และ API_URL ก่อนใช้งาน (ดูคู่มือติดตั้ง ขั้นตอนที่ 7)'), kind: 'error' });
       return;
     }
-    desktopMode = Boolean(C.DESKTOP_QR_ENABLED && C.DESKTOP_LINE_OA_ID && !/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent)
+    desktopMode = Boolean(C.DESKTOP_QR_ENABLED && !/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent)
       && !(navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1));
+    var params = new URLSearchParams(location.search);
+    var scan = params.get('desktop_scan') || new URLSearchParams((params.get('liff.state') || '').split('?').pop()).get('desktop_scan');
+    if (C.DESKTOP_QR_ENABLED && scan) {
+      if (desktopMode) {
+        viewMessage(app, { title: _t('เปิด QR ใน LINE บนมือถือ') });
+        return;
+      }
+      Auth.init().then(function () {
+        if (!liff.isInClient()) throw appErr('LINE_REQUIRED', _t('กรุณาสแกนจากแอป LINE บนมือถือ'));
+        viewMessage(app, { title: _t('ยืนยันเข้า WMS บนคอมพิวเตอร์'), message: _t('ยืนยันเฉพาะเมื่อคุณกำลังเข้าสู่ระบบบนคอมพิวเตอร์เครื่องนั้น') });
+        var confirm = el('button', { type: 'button', class: 'btn btn-primary', onclick: function () {
+          confirm.disabled = true;
+          Api.raw('desktop.confirm', {}, null, { scan: scan }, true).then(function () {
+            history.replaceState({}, '', location.pathname);
+            viewMessage(app, { title: _t('ยืนยันแล้ว'), message: _t('กลับไปที่หน้าจอคอมพิวเตอร์เพื่อใช้งาน') });
+          }).catch(showLoginRecovery);
+        } }, _t('ยืนยัน'));
+        app.appendChild(confirm);
+      }).catch(showLoginRecovery);
+      return;
+    }
     var login = desktopMode ? desktopLogin(app) : Auth.init().then(function () {
       var identity = liff.getDecodedIDToken();
       if (!identity || !identity.sub) throw appErr('AUTH_EXPIRED', _t('ไม่สามารถยืนยันบัญชี LINE ได้'));
