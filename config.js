@@ -13,6 +13,9 @@ window.APP_CONFIG = {
   SUPABASE_API_URL: 'https://dqipcgoqzikaghojujkg.supabase.co/functions/v1/line-wms-api',
   SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_r80uS4T7IpvbIMZtwcqtaA_a-eqU1bi',
 
+  // LINE Official Account ID (including @). Empty while desktop QR is in testing.
+  DESKTOP_LINE_OA_ID: '',
+
   // เวลารอคำตอบสูงสุดต่อครั้ง (มิลลิวินาที)
   REQUEST_TIMEOUT_MS: 30000
 };
