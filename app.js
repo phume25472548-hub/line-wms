@@ -214,6 +214,31 @@
     }
   };
 
+  // Explicit recovery for stale LINE browser credentials. No automatic infinite redirect.
+  function showLoginRecovery(error) {
+    var root = $('#app');
+    viewMessage(root, { title: _t('เข้าสู่ระบบ LINE ไม่สำเร็จ'), message: (error && error.message) || _t('กรุณาเข้าสู่ระบบใหม่'), kind: 'error' });
+    var panel = el('div', { class: 'login-recovery' });
+    panel.style.cssText = 'display:flex;flex-wrap:wrap;gap:12px;justify-content:center;padding:16px';
+    var retry = el('button', { type: 'button' }, _t('เข้าสู่ระบบใหม่'));
+    retry.onclick = function () {
+      sessionStorage.removeItem('wms_relogin');
+      try {
+        if (window.liff && liff.isLoggedIn()) liff.logout();
+        if (window.liff && !liff.isInClient()) {
+          liff.login({ redirectUri: location.origin + location.pathname });
+        } else {
+          location.reload();
+        }
+      } catch (err) { location.reload(); }
+    };
+    panel.appendChild(retry);
+    var info = el('p', {}, _t('หากต้องการเปลี่ยนบัญชี LINE ภายในแอป LINE ต้องเปลี่ยนบัญชีในแอปก่อน แล้วเปิด WMS ใหม่'));
+    info.style.cssText = 'width:100%;text-align:center;font-size:13px';
+    panel.appendChild(info);
+    root.appendChild(panel);
+  }
+
   /* ================================================================ */
   /* API client — อ่าน / เขียน (กันบันทึกซ้ำด้วย Request ID)              */
   /* ================================================================ */
@@ -2880,7 +2905,7 @@
       render();
       return checkPending(false).then(function (r) { if (r !== null) render(); });
     }).catch(function (e) {
-      if (e && (e.code === 'AUTH_EXPIRED' || e.code === 'AUTH_INVALID' || e.code === 'AUTH_REQUIRED')) return Auth.relogin();
+      if (e && (e.code === 'AUTH_EXPIRED' || e.code === 'AUTH_INVALID' || e.code === 'AUTH_REQUIRED')) return showLoginRecovery(e);
       if (e && e.code === 'USER_PENDING') {
         viewMessage(app, { title: _t('รอผู้ดูแลอนุมัติ'), message: _t('ระบบลงทะเบียนชื่อ LINE ของคุณ') + (e.details && e.details.name ? ' (' + e.details.name + ')' : '') + _t(' แล้ว\nกรุณาแจ้งผู้ดูแลระบบให้อนุมัติในเมนู ตั้งค่าระบบ > พนักงาน'), code: e.details && e.details.userId, codeLabel: _t('รหัสผู้ใช้ LINE ของคุณ'), pending: true });
         return;
