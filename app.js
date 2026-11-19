@@ -887,6 +887,7 @@
       [true, _t('แดชบอร์ด'), _t('สรุปภาพรวม'), 'chart', 'c-blue', viewDashboard],
       [can.admin, _t('ค่าใช้จ่าย'), _t('บันทึกและดูรายการรายจ่าย'), 'receipt', 'c-amber', viewExpenses],
       [can.admin, _t('การเงิน'), _t('ต้นทุน ยอดเงิน กำไร'), 'coin', 'c-green', viewFinance],
+      [can.admin, _t('นำเข้าเอกสาร'), _t('ตรวจรายงาน Shopee และจับคู่ออเดอร์'), 'doc', 'c-blue', viewDocumentImport],
       [can.admin, _t('ตั้งค่าระบบ'), _t('ช่องทาง พนักงาน สินค้า'), 'gear', 'c-gray', viewAdmin]
     ];
     var initial = (u.name || '?').trim().charAt(0);
@@ -916,6 +917,12 @@
   /* ================================================================ */
   /* 3.1 รับสินค้าเข้า / 3.4 ส่งคืนซัพพลายเออร์ / 3.5 ตัดเสีย (หลาย SKU)  */
   /* ================================================================ */
+  function viewDocumentImport(app) {
+    window.WmsDocumentImport.mount(page(app, _t('นำเข้าเอกสาร')), {
+      read: function (action, payload) { return Api.read(action, payload); },
+      channels: platformChannels()
+    });
+  }
   function cartDocView(app, cfg) {
     var footerBtn = el('button', { class: 'btn btn-primary btn-lg', style: 'flex:1' });
     var statusPick = cfg.fromStatus ? choiceGroup([['AVAILABLE', _t('จากยอดพร้อมขาย')], ['INSPECTION', _t('จากยอดรอตรวจสอบ')]], 'AVAILABLE', function (v) { /* เปลี่ยนสถานะต้นทาง */ rebuildCart(v); }) : null;
