@@ -453,3 +453,12 @@ html:not([data-lang="th"]) .choice { min-width: 0; overflow-wrap: break-word; hy
 .document-import-table th { background:var(--bg); color:var(--ink); text-align:left; }
 .document-import-table th,.document-import-table td { padding:12px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
 .document-import-table input[type=checkbox] { width:22px; height:22px; }
+.product-sales-table { min-width:600px; }
+.product-sales-card > .small { margin:8px 0; }
+@media (max-width:600px) {
+  .product-sales-table { min-width:0; table-layout:fixed; font-size:13px; }
+  .product-sales-table th:first-child { width:44%; }
+  .product-sales-table th,.product-sales-table td { padding:8px 4px; overflow-wrap:anywhere; }
+  .product-sales-table th.num { white-space:normal; font-size:12px; }
+  .product-sales-table td:first-child .mono { font-size:10px; }
+}

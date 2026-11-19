@@ -1474,6 +1474,7 @@
   }
 
   function viewDashboard(app) {
+    var loadVersion = 0;
     var out = el('div', { style: 'display:flex;flex-direction:column;gap:14px' });
     var from = el('input', { class: 'input', type: 'date', value: todayStr(6) });
     var to = el('input', { class: 'input', type: 'date', value: todayStr(0) });
@@ -1487,6 +1488,7 @@
         return;
       }
       rangeError.textContent = '';
+      var requestVersion=++loadVersion, selectedFrom=from.value, selectedTo=to.value;
       clear(out); append(out, el('div', { class: 'empty' }, el('div', { class: 'spinner', style: 'margin:0 auto' })));
       var year = todayStr(0).slice(0, 4);
       var financePromise = State.user && State.user.role === 'ADMIN'
@@ -1497,13 +1499,15 @@
         ]).then(function (x) { return { records: x[0], expenses: x[1], legacy: x[2] }; }).catch(function (e) { return { error: e }; })
         : Promise.resolve(null);
       Promise.all([
-        Api.read('dashboard', { dateFrom: from.value, dateTo: to.value }),
-        Api.read('history.search', { dateFrom: from.value, dateTo: to.value, limit: 500 }),
+        Api.read('dashboard', { dateFrom: selectedFrom, dateTo: selectedTo }),
+        Api.read('history.search', { dateFrom: selectedFrom, dateTo: selectedTo, limit: 500 }),
         financePromise
       ]).then(function (result) {
+        if(requestVersion!==loadVersion)return;
         var d = result[0], h = result[1], finance = result[2];
         clear(out);
         var t = d.todayStats, tot = d.totals;
+        var sales=d.productSales;
         function kpi(v, k, c) { return el('div', { class: 'kpi' }, el('div', { class: 'v', style: c ? 'color:' + c : '' }, fmt(v)), el('div', { class: 'k' }, k)); }
         var typeNames = { IN: _t('รับเข้า'), OUT: _t('ขายออก'), RETURN: _t('รับคืน'), SUPPLIER_RETURN: _t('ส่งคืนซัพพลายเออร์'), WRITE_OFF: _t('ตัดเสีย'), ADJUST: _t('ปรับยอด'), TRANSFER: _t('ย้ายสถานะ'), CANCEL: _t('ยกเลิกออเดอร์') };
         var chartColors = ['#247c67', '#e27153', '#5492c5', '#d7a647', '#9167b7', '#6b7b8c', '#35a1a0', '#cf6b9d'];
@@ -1534,7 +1538,18 @@
           el('div', { class: 'kpis' }, kpi(tot.skuCount, _t('SKU ที่ใช้งาน')), kpi(tot.available, _t('สินค้าพร้อมขาย'), 'var(--brand-dark)'), kpi(tot.inspection, _t('สินค้ารอตรวจสอบ'), 'var(--warn)'), kpi(d.lowStockCount, _t('SKU ใกล้หมด'), d.lowStockCount ? 'var(--danger)' : '')),
           el('div', { class: 'section-title' }, _t('วันนี้ ') + d.today),
           el('div', { class: 'kpis' }, kpi(t.ordersToday, _t('ออเดอร์', 'kpi')), kpi(t.soldToday, _t('ชิ้นที่ขายออก')), kpi(t.inToday, _t('ชิ้นที่รับเข้า')), kpi(t.returnToday, _t('ชิ้นที่รับคืน')), kpi(t.writeOffToday, _t('ชิ้นที่ตัดเสีย')), kpi(t.cancelToday, _t('ชิ้นคืนจากยกเลิก'))),
-          el('div', { class: 'card' }, el('h3', null, _t('ความเคลื่อนไหวตามประเภท')), el('div', { class: 'small muted' }, from.value + ' — ' + to.value + (h.truncated ? _t(' · แสดงรายการล่าสุด 500 รายการ') : '')), chartBody,
+          el('div', { class: 'card product-sales-card' }, el('h3',null,_t('จำนวนขายแยกตามสินค้า')),
+            el('div',{class:'small muted'},selectedFrom+' — '+selectedTo),
+            sales ? el('div',{class:'kpis'},kpi(sales.totals.sold,_t('จำนวนขายออกทั้งหมด (หน่วย)')),kpi(sales.items.length,_t('สินค้าที่มีรายการ (SKU)')),kpi(sales.totals.net,_t('จำนวนขายสุทธิ (หน่วย)'))) : null,
+            sales && sales.items.length ? el('div',{class:'annual-table-scroll'},el('table',{class:'doc-table annual-report-table product-sales-table'},
+              el('thead',null,el('tr',null,[_t('สินค้า'),_t('ขายออก'),_t('ยกเลิก'),_t('ลูกค้าคืน'),_t('ขายสุทธิ')].map(function(label,i){return el('th',{class:i?'num':''},label);}))),
+              el('tbody',null,sales.items.map(function(r){return el('tr',null,
+                el('td',null,el('div',null,r.name),el('div',{class:'small muted mono'},r.sku+' · '+_u(r.unit))),
+                [r.sold,r.cancelled,r.returned,r.net].map(function(q){return el('td',{class:'num'},fmt(q));}));}))))
+              : el('div',{class:'empty'},_t('ไม่มีรายการขาย ยกเลิก หรือคืนสินค้าในช่วงวันที่เลือก')),
+            el('div',{class:'small muted'},_t('ขายสุทธิ = ขายออก − ยกเลิก − ลูกค้าคืน โดยนับวันที่เกิดแต่ละรายการตามเวลาไทย จึงอาจติดลบหากคืนสินค้าที่ขายก่อนช่วงนี้')),
+            el('div',{class:'small muted'},_t('นับจากรายการสินค้าใน WMS ไม่รวมยอดย้อนหลังที่นำเข้าเฉพาะจำนวนเงิน'))),
+          el('div', { class: 'card' }, el('h3', null, _t('ความเคลื่อนไหวตามประเภท')), el('div', { class: 'small muted' }, selectedFrom + ' — ' + selectedTo + (h.truncated ? _t(' · แสดงรายการล่าสุด 500 รายการ') : '')), chartBody,
             el('div', { class: 'small muted' }, _t('กราฟนับจำนวนชิ้นแบบค่าสัมบูรณ์ตามประเภทธุรกรรม'))),
           el('div', { class: 'card' }, el('h3', null, _t('สินค้าใกล้หมด')),
             d.lowStock.length ? d.lowStock.map(function (l) {
@@ -1558,7 +1573,7 @@
         } else if (finance && finance.error) {
           append(out, el('div', { class: 'banner warn' }, icon('alert'), el('div', null, _t('โหลดสรุปรายเดือนหรือรายการค่าใช้จ่ายไม่ได้: ') + finance.error.message)));
         }
-      }).catch(function (e) { clear(out); append(out, el('div', { class: 'banner error' }, icon('alert'), el('div', null, e.message))); });
+      }).catch(function (e) { if(requestVersion!==loadVersion)return;clear(out); append(out, el('div', { class: 'banner error' }, icon('alert'), el('div', null, e.message))); });
     }
     page(app, _t('แดชบอร์ด'), out, null, el('button', { class: 'icon-btn', 'aria-label': _t('รีเฟรช'), onclick: load }, icon('refresh')));
     load();
