@@ -3,7 +3,7 @@
   'use strict';
   function node(tag, text) { var e = document.createElement(tag); if (text != null) e.textContent = text; return e; }
   function normalized(v) { return String(v == null ? '' : v).trim().toUpperCase(); }
-  function amount(v) { var n = Number(String(v).replace(/,/g, '')); if (!Number.isFinite(n)) throw new Error('พบจำนวนเงินที่อ่านไม่ได้'); return n; }
+  function amount(v) { var s=String(v==null?'':v).replace(/,/g,'').trim();var n=Number(s); if(!/^-?\d+(\.\d+)?$/.test(s)||!Number.isFinite(n))throw new Error('พบจำนวนเงินที่ว่างหรืออ่านไม่ได้ กรุณาตรวจไฟล์'); return n; }
   function dateOnly(v) {
     var s=String(v||'').trim().slice(0,10);
     if(!/^20\d\d-\d\d-\d\d$/.test(s)) throw new Error('วันที่ในรายงานไม่ใช่ YYYY-MM-DD กรุณาส่งออกไฟล์ Shopee ใหม่');
