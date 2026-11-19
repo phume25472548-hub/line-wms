@@ -23,6 +23,12 @@
   /* คีย์ "ข้อความ|ctx" = ความหมายเฉพาะที่ (คำเดียวกันแต่ใช้คนละแบบ)          */
   /* ---------------------------------------------------------------- */
   var T = [
+    ['นำเข้าเอกสาร','Import documents','导入文件'],
+    ['ตรวจรายงาน Shopee และจับคู่ออเดอร์','Review Shopee reports and match orders','核对 Shopee 报表并匹配订单'],
+    ['เลขพัสดุ (ถ้ามี)','Tracking number (optional)','运单号（选填）'],
+    ['กรอกแยกจากเลขออเดอร์','Enter separately from the order number','与订单号分开填写'],
+    ['ใช้หมายเลขคำสั่งซื้อของแพลตฟอร์ม ห้ามใช้หมายเลขติดตามพัสดุ','Use the platform order number. Do not enter a tracking number here.','请使用平台订单号，请勿在此输入运单号。'],
+    ['ยอดย้อนหลังรวมจาก ZEONWON และเอกสาร Shopee ที่ยืนยันนำเข้าแล้ว ยอดขายจากเอกสารอิงวันที่สั่งซื้อ ยอดรับจริงอิงวันที่โอนและหักค่าธรรมเนียมแล้ว จึงไม่หักค่าธรรมเนียมซ้ำ ยอดสุทธิไม่ใช่กำไรทางบัญชี','Historical figures include ZEONWON and confirmed Shopee imports. Imported sales use the order date; receipts use the transfer date and already include fee deductions. Net cash is not accounting profit.','历史数据包含 ZEONWON 和已确认导入的 Shopee 文件。导入销售按下单日期统计，实收按转账日期统计且已扣费用，不重复扣除。净现金不等于会计利润。'],
     // ประเภทรายการ / สถานะ
     ['รับเข้า', 'Stock in', '入库'],
     ['ขายออก', 'Sale', '销售出库'],
