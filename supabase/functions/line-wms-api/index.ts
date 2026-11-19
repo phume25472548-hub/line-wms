@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { documentImport } from './document-import.ts';
 
 const LINE_LOGIN_CHANNEL_ID = "2012121135";
 const APP_NAME = "LINE WMS";
@@ -216,7 +217,8 @@ function orderView(o: Row, all: Record<string, Row>, channels: Record<string, Ro
     lineCount: n(o.line_count), totalQty: n(o.total_qty), createdBy: o.created_by_name,
     createdAt: o.created_at, completedAt: o.completed_at, cancelledAt: o.cancelled_at,
     cancelReason: o.cancel_reason, note: o.note };
-  if (includeItems) v.items = all.items.filter((it: Row) => it.internal_order_id === o.internal_order_id).map((it: Row) => ({
+  v.trackingNumber = o.tracking_number || '';
+  if (includeItems) v.items = all.order_items.filter((it: Row) => it.internal_order_id === o.internal_order_id).map((it: Row) => ({
     orderItemId: it.order_item_id, sku: it.sku, name: it.product_name, unit: products[it.sku]?.unit || "ชิ้น",
     qty: n(it.quantity), returnedQty: n(it.returned_qty), returnableQty: n(it.quantity) - n(it.returned_qty),
   }));
@@ -390,8 +392,20 @@ async function readAction(db: ReturnType<typeof serviceClient>, action: string, 
     const { data, error } = await db.from("legacy_monthly_financial_totals").select("month_start,summary_kind,category,amount,entry_count,source_name")
       .gte("month_start", from).lt("month_start", to).order("month_start").order("summary_kind").order("category");
     if (error) throw new ApiError("DATABASE_ERROR", "โหลดสรุปยอดย้อนหลังไม่สำเร็จ", 500);
-    return { items: (data || []).map((r: Row) => ({ month: text(r.month_start).slice(0, 7), kind: r.summary_kind,
-      category: r.category, amount: round(n(r.amount)), count: n(r.entry_count), source: r.source_name })) };
+    const imported:Row[]=[];
+    for(let start=0;;start+=1000){
+      const page=await db.from('document_import_entries').select('event_date,kind,amount,fee_amount,source_name,channel_id').gte('event_date',from).lt('event_date',to).order('id').range(start,start+999);
+      if(page.error)throw new ApiError('DATABASE_ERROR','โหลดรายการนำเข้าไม่สำเร็จ',500);
+      imported.push(...(page.data||[]));if((page.data||[]).length<1000)break;
+    }
+    const channelNames=Object.fromEntries((await rows(db,'channels')).map((c:Row)=>[c.channel_id,c.channel_name]));
+    const items = (data || []).map((r: Row) => ({ month: text(r.month_start).slice(0, 7), kind: r.summary_kind,
+      category: r.category, amount: round(n(r.amount)), count: n(r.entry_count), source: r.source_name }));
+    for(const r of imported) {
+      items.push({month:text(r.event_date).slice(0,7),kind:'income',category:r.kind==='orders'?'Net Sales':'Actual Received',amount:n(r.amount),count:r.kind==='income'?1:0,source:'Shopee: '+r.source_name,channelName:channelNames[r.channel_id]||r.channel_id} as any);
+      if(r.kind==='income'&&n(r.fee_amount))items.push({month:text(r.event_date).slice(0,7),kind:'expense',category:'Shopee fees',amount:n(r.fee_amount),count:0,source:'Shopee: '+r.source_name,channelName:channelNames[r.channel_id]||r.channel_id} as any);
+    }
+    return { items };
   }
   if (action === "finance.order") {
     const all=await need("orders","order_items","products","channels","fin_orders","fin_costs","sales_bills");
@@ -652,6 +666,9 @@ async function writeAction(db: ReturnType<typeof serviceClient>, action: string,
     const feeAmount=round(sale-received),profit=round(received-costAmount),marginPct=sale>0?round(profit/sale*100):0;
     const costDetail=lines.map((line)=>`${line.sku} ${line.qty}x${n(line.unitCost).toFixed(2)}`).join("; ").slice(0,2000);
     const beforeRead=await db.from("fin_orders").select("*").eq("internal_order_id",internalOrderId).maybeSingle();
+    const imported=await db.from('document_import_entries').select('id').eq('channel_id',order.channel_id).eq('external_order_id',order.external_order_id).limit(1);
+    if(imported.error)throw new ApiError('DATABASE_ERROR','ตรวจรายการนำเข้าไม่สำเร็จ',500);
+    if(imported.data?.length)throw new ApiError('IMPORT_DUPLICATE','ออเดอร์นี้มียอดจากเอกสารนำเข้าแล้ว กรุณาตรวจประวัติการนำเข้า');
     if(beforeRead.error)throw new ApiError("DATABASE_ERROR","อ่านข้อมูลการเงินเดิมไม่สำเร็จ",500);
     const before=beforeRead.data;
     const finFields={channel_id:order.channel_id,external_order_id:order.external_order_id,sale_price:sale,received_amount:received,
@@ -762,9 +779,13 @@ async function writeAction(db: ReturnType<typeof serviceClient>, action: string,
     const lines=checked.reduce((a,l)=>{const x=a.find((z:Row)=>z.sku===l.sku);if(x)x.qty+=l.qty;else a.push({...l});return a;},[] as Row[]),note=writeText(p.note,300,"หมายเหตุ");
     if(action==="order.create"&&ch.order_mode==="AUTO")throw new ApiError("USE_POS","ช่องทางนี้เป็นช่องทางขายตรง กรุณาใช้เมนูขายหน้าร้าน");if(action==="pos.sale"&&ch.order_mode!=="AUTO")throw new ApiError("NOT_DIRECT","ช่องทางนี้เป็นช่องทางแพลตฟอร์ม กรุณาใช้เมนูขายสินค้าออก");
     let ext=text(p.orderNo).trim().replace(/\s+/g,"").toUpperCase();if(action==="pos.sale")ext=await autoNo(ch);if(action==="order.create"&&(!/^[A-Z0-9][A-Z0-9\-_.\/#]{3,63}$/.test(ext)))throw new ApiError("INVALID_ORDER_NO","เลขออเดอร์ไม่ถูกต้อง");
+    const trackingNumber=writeText(p.trackingNumber,80,'เลขพัสดุ').toUpperCase();
+    if(trackingNumber&&!/^[A-Z0-9_-]+$/.test(trackingNumber))throw new ApiError('INVALID_TEXT','เลขพัสดุไม่ถูกต้อง');
+    if(action==='order.create'&&/shopee/i.test(channelId+' '+ch.channel_name)&&!/^\d{6}[A-Z0-9]{8}$/.test(ext))throw new ApiError('INVALID_ORDER_NO','กรุณาใช้หมายเลขคำสั่งซื้อ Shopee 14 ตัว ไม่ใช่เลขพัสดุ');
+    if(trackingNumber===ext)throw new ApiError('INVALID_ORDER_NO','เลขออเดอร์กับเลขพัสดุต้องเป็นคนละเลข');
     const allOrders=await rows(db,"orders"),orderKey=`${channelId}|${ext}`;if(allOrders.some((o)=>o.order_key===orderKey&&o.order_status!=="CANCELLED"))throw new ApiError("DUPLICATE_ORDER",`ออเดอร์ ${ext} ถูกบันทึกแล้ว`);
     const internal=docNo("ORD",5),totalQty=lines.reduce((a,l)=>a+l.qty,0),itemRows=lines.map((l,i)=>({order_item_id:`${internal}-${pad(i+1,2)}`,internal_order_id:internal,sku:l.sku,product_name:productBy[l.sku].product_name,quantity:l.qty,returned_qty:0}));
-    appendGroups.push({table:"orders",rows:[{internal_order_id:internal,channel_id:channelId,external_order_id:ext,order_key:orderKey,order_status:"COMPLETED",line_count:lines.length,total_qty:totalQty,created_by:user.id,created_by_name:user.name,created_at:eventAt,completed_at:eventAt,cancelled_by:"",cancelled_at:null,cancel_reason:"",note,operation_id:"PENDING"}]},{table:"order_items",rows:itemRows});
+    appendGroups.push({table:"orders",rows:[{internal_order_id:internal,channel_id:channelId,external_order_id:ext,tracking_number:trackingNumber||null,order_key:orderKey,order_status:"COMPLETED",line_count:lines.length,total_qty:totalQty,created_by:user.id,created_by_name:user.name,created_at:eventAt,completed_at:eventAt,cancelled_by:"",cancelled_at:null,cancel_reason:"",note,operation_id:"PENDING"}]},{table:"order_items",rows:itemRows});
     lines.forEach((l)=>moves.push({sku:l.sku,product_name:productBy[l.sku].product_name,stock_status:"AVAILABLE",delta:-l.qty,transaction_type:"OUT",sub_type:"SALE",reference_id:internal,channel_id:channelId,reason:ext,note,user_name:user.name}));
     if(action==="order.create")result={message:"บันทึกการขายและตัดสต๊อกเรียบร้อย",internalOrderId:internal,orderNo:ext,channelId,channelName:ch.channel_name,totalQty,createdAt:eventAt,createdBy:user.name,lines:lines.map((l)=>({sku:l.sku,name:productBy[l.sku].product_name,unit:productBy[l.sku].unit||"ชิ้น",qty:l.qty}))};
     else {
@@ -866,6 +887,15 @@ Deno.serve(async (req: Request) => {
     const user = await getOrRegisterUser(db, claims);
     if (action === "bootstrap") return response({ ok: true, data: await bootstrap(db, user), replay: false }, 200, origin);
     const payload = body.payload && typeof body.payload === "object" && !Array.isArray(body.payload) ? body.payload : {};
+    if(action.startsWith('documents.')) {
+      try { return response({ok:true,data:await documentImport(db,action,payload,user)},200,origin); }
+      catch(e) {
+        const raw=e instanceof Error?e.message:'IMPORT_ERROR';
+        const messages:Record<string,string>={FORBIDDEN:'เฉพาะผู้ดูแลระบบเท่านั้น',IMPORT_DUPLICATE:'รายการนี้เคยนำเข้าแล้ว กรุณาตรวจจับคู่ใหม่',IMPORT_STALE:'ข้อมูลออเดอร์เปลี่ยนไป กรุณาตรวจจับคู่ใหม่',FINANCE_EXISTS:'ออเดอร์นี้มียอดการเงินเดิมแล้ว ต้องตรวจยอดก่อนนำเข้า',LEGACY_OVERLAP:'มียอดสรุปเดิมในเดือนนี้ กรุณาตรวจยอดซ้ำก่อน',TRACKING_CONFLICT:'เลขพัสดุขัดแย้งกับข้อมูลเดิม',HISTORICAL_CONFIRM_REQUIRED:'กรุณายืนยันรายการย้อนหลังที่ไม่พบออเดอร์',IMPORT_REVIEW_REQUIRED:'รายการนี้ต้องตรวจสอบก่อนนำเข้า',DUPLICATE_ORDER:'เลขออเดอร์นี้ถูกใช้แล้ว',IMPORT_ROW_LIMIT:'รองรับครั้งละ 1–500 รายการ',SELECT_SHOPEE_CHANNEL:'กรุณาเลือกช่องทาง Shopee ที่เปิดใช้งาน',DUPLICATE_SOURCE_ROW:'พบรายการซ้ำในเอกสาร กรุณาตรวจไฟล์',INVALID_DATE:'วันที่ในรายงานไม่ถูกต้อง',INVALID_AMOUNT:'จำนวนเงินในรายงานไม่ถูกต้อง'};
+        const code=/^[A-Z_]+$/.test(raw)?raw:'IMPORT_ERROR';
+        return response({ok:false,error:{code,message:messages[code]||'ตรวจหรือนำเข้าเอกสารไม่สำเร็จ กรุณาลองใหม่'}},code==='FORBIDDEN'?403:400,origin);
+      }
+    }
     const writeActions = new Set(["product.save","stock.in","order.create","order.cancel","return.customer","return.supplier",
       "writeoff","transfer","adjust","admin.channel.save","admin.user.save","admin.setting.save","finance.payment.save",
       "finance.cost.save","product.price.save","pos.sale"]);

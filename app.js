@@ -887,6 +887,7 @@
       [true, _t('แดชบอร์ด'), _t('สรุปภาพรวม'), 'chart', 'c-blue', viewDashboard],
       [can.admin, _t('ค่าใช้จ่าย'), _t('บันทึกและดูรายการรายจ่าย'), 'receipt', 'c-amber', viewExpenses],
       [can.admin, _t('การเงิน'), _t('ต้นทุน ยอดเงิน กำไร'), 'coin', 'c-green', viewFinance],
+      [can.admin, _t('นำเข้าเอกสาร'), _t('ตรวจรายงาน Shopee และจับคู่ออเดอร์'), 'doc', 'c-blue', viewDocumentImport],
       [can.admin, _t('ตั้งค่าระบบ'), _t('ช่องทาง พนักงาน สินค้า'), 'gear', 'c-gray', viewAdmin]
     ];
     var initial = (u.name || '?').trim().charAt(0);
@@ -916,6 +917,12 @@
   /* ================================================================ */
   /* 3.1 รับสินค้าเข้า / 3.4 ส่งคืนซัพพลายเออร์ / 3.5 ตัดเสีย (หลาย SKU)  */
   /* ================================================================ */
+  function viewDocumentImport(app) {
+    window.WmsDocumentImport.mount(page(app, _t('นำเข้าเอกสาร')), {
+      read: function (action, payload) { return Api.read(action, payload); },
+      channels: platformChannels()
+    });
+  }
   function cartDocView(app, cfg) {
     var footerBtn = el('button', { class: 'btn btn-primary btn-lg', style: 'flex:1' });
     var statusPick = cfg.fromStatus ? choiceGroup([['AVAILABLE', _t('จากยอดพร้อมขาย')], ['INSPECTION', _t('จากยอดรอตรวจสอบ')]], 'AVAILABLE', function (v) { /* เปลี่ยนสถานะต้นทาง */ rebuildCart(v); }) : null;
@@ -1019,7 +1026,7 @@
       el('div', { class: 'card' }, el('div', { class: 'small muted' }, _t('ช่องทางขาย')), el('div', { style: 'font-weight:700;font-size:18px' }, cfg.channel.name),
         el('button', { class: 'chip', style: 'margin-top:8px', onclick: cfg.changeChannel }, _t('เปลี่ยนช่องทาง'))),
       el('div', { class: 'field' }, el('div', { class: 'label' }, cfg.label || _t('เลขออเดอร์')), bar),
-      el('div', { class: 'hint' }, cfg.hint || _t('สแกนบาร์โค้ด/QR เลขออเดอร์บนใบปะหน้า หรือพิมพ์เลขออเดอร์จากแอปแพลตฟอร์ม'))
+      el('div', { class: 'hint' }, cfg.hint || _t('ใช้หมายเลขคำสั่งซื้อของแพลตฟอร์ม ห้ามใช้หมายเลขติดตามพัสดุ'))
     ]);
     setTimeout(function () { bar.input.focus(); }, 100);
   }
@@ -1065,6 +1072,7 @@
     // step 3 — สแกนสินค้าในออเดอร์
     var footerBtn = el('button', { class: 'btn btn-primary btn-lg', style: 'flex:1' });
     var cart = Cart({ checkStatus: 'AVAILABLE', requireActive: true, onChange: upd, scanTitle: _t('สแกนสินค้าในออเดอร์') });
+    var tracking = textField(_t('เลขพัสดุ (ถ้ามี)'), _t('กรอกแยกจากเลขออเดอร์'), {max:80});
     var note = textField(_t('หมายเหตุ (ถ้ามี)'), _t('เช่น ชื่อลูกค้า'), { max: 300 });
     function upd() { footerBtn.disabled = !cart.count(); footerBtn.textContent = cart.count() ? _t('ตรวจสอบและยืนยัน (') + cart.count() + _t(' รายการ / ') + fmt(cart.total()) + _t(' ชิ้น)') : _t('สแกนสินค้าในออเดอร์'); }
     upd();
@@ -1073,7 +1081,7 @@
         el('div', { class: 'grow' }, el('div', { class: 'small muted' }, st.channel.name + _t(' · ขั้นที่ 3 สแกนสินค้า')),
           el('div', { class: 'mono', style: 'font-weight:700;font-size:20px;word-break:break-all' }, st.orderNo || _t('ออกเลขอัตโนมัติเมื่อยืนยัน'))),
         el('button', { class: 'chip', onclick: function () { replaceTop(viewSale, st.channel.mode === 'AUTO' ? { step: 1 } : { step: 2, channel: st.channel }); } }, _t('เปลี่ยน'))),
-      cart.el, note
+      tracking, cart.el, note
     ]);
     app.appendChild(el('div', { class: 'footer-bar' }, el('div', { class: 'inner' }, footerBtn)));
     footerBtn.addEventListener('click', function () {
@@ -1081,11 +1089,11 @@
       if (over.length) { showError({ code: 'INSUFFICIENT_STOCK', message: over.map(function (l) { return l.product.name + ' (' + l.product.sku + _t(') พร้อมขายมี ') + l.product.balance.available + _t(' แต่ใส่ ') + l.qty; }).join('\n') }); return; }
       confirmSheet({
         title: _t('ยืนยันตัดสต๊อกออเดอร์'), confirmText: _t('ยืนยันขายและตัดสต๊อก'),
-        rows: [[_t('ช่องทาง'), st.channel.name], [_t('เลขออเดอร์'), st.orderNo || _t('ระบบออกให้อัตโนมัติ')]],
+        rows: [[_t('ช่องทาง'), st.channel.name], [_t('เลขออเดอร์'), st.orderNo || _t('ระบบออกให้อัตโนมัติ')], [_t('เลขพัสดุ (ถ้ามี)'),tracking.input.value.trim()||'—']],
         lines: cart.summary().map(function (l) { l.sign = '−'; return l; })
       }).then(function (ok) {
         if (!ok) return;
-        var payload = { channelId: st.channel.channelId, orderNo: st.orderNo, lines: cart.lines(), note: note.input.value.trim() };
+        var payload = { channelId: st.channel.channelId, orderNo: st.orderNo, trackingNumber:tracking.input.value.trim(), lines: cart.lines(), note: note.input.value.trim() };
         submitWrite('order.create', payload, _t('ขายออเดอร์ ') + (st.orderNo || st.channel.name)).then(function (d) {
           if (!d) return;
           var packOrder = { channelId: d.channelId, channelName: d.channelName, orderNo: d.orderNo, status: 'COMPLETED', completedAt: d.createdAt, createdBy: d.createdBy,
@@ -1450,6 +1458,13 @@
     });
     var legacyChannel = { orders: 0, sales: 0, income: 0, fees: 0 };
     (legacy || []).forEach(function (r) {
+      if(r.channelName){
+        var c=byChannel[r.channelName]||(byChannel[r.channelName]={orders:0,sales:0,income:0,fees:0});
+        if(r.kind==='income'&&r.category==='Actual Received'){c.income+=Number(r.amount)||0;c.orders+=Number(r.count)||0;}
+        else if(r.kind==='income'&&r.category==='Net Sales')c.sales+=Number(r.amount)||0;
+        else if(r.kind==='expense'&&String(r.category||'').toLowerCase()==='shopee fees')c.fees+=Number(r.amount)||0;
+        return;
+      }
       if (r.kind === 'income' && r.category === 'Actual Received') { legacyChannel.orders += Number(r.count) || 0; legacyChannel.income += Number(r.amount) || 0; }
       else if (r.kind === 'income' && r.category === 'Net Sales') legacyChannel.sales += Number(r.amount) || 0;
       else if (r.kind === 'expense' && String(r.category || '').toLowerCase() === 'shopee fees') legacyChannel.fees += Number(r.amount) || 0;
@@ -1615,7 +1630,7 @@
           el('div', { class: 'kpi' }, el('div', { class: 'v' }, money(annual.total.fees)), el('div', { class: 'k' }, _t('ค่าธรรมเนียมรวม (บาท)'))),
           el('div', { class: 'kpi' }, el('div', { class: 'v', style: 'color:var(--danger)' }, money(annual.total.expense)), el('div', { class: 'k' }, _t('รายจ่ายรวม (บาท)'))),
           el('div', { class: 'kpi' }, el('div', { class: 'v' }, money(net)), el('div', { class: 'k' }, _t('เงินรับหลังหักรายจ่ายที่บันทึก (บาท)')))); }
-        var basis = _t('ยอดย้อนหลังรวมจาก ZEONWON เป็นยอดรายเดือนตามหมวด ไม่มีรายละเอียดรายบิล ยอดรับจริงเป็นยอดหลังหักค่าธรรมเนียม Shopee แล้ว ค่าธรรมเนียมจึงแสดงแยกและไม่นำมาหักซ้ำ ยอดสุทธิไม่ใช่กำไรทางบัญชี');
+        var basis = _t('ยอดย้อนหลังรวมจาก ZEONWON และเอกสาร Shopee ที่ยืนยันนำเข้าแล้ว ยอดขายจากเอกสารอิงวันที่สั่งซื้อ ยอดรับจริงอิงวันที่โอนและหักค่าธรรมเนียมแล้ว จึงไม่หักค่าธรรมเนียมซ้ำ ยอดสุทธิไม่ใช่กำไรทางบัญชี');
         append(out, [
           reportTitle,
           el('div', { class: 'row annual-report-actions' }, el('div', { class: 'small muted grow' }, basis),
