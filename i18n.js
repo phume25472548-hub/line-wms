@@ -23,6 +23,15 @@
   /* คีย์ "ข้อความ|ctx" = ความหมายเฉพาะที่ (คำเดียวกันแต่ใช้คนละแบบ)          */
   /* ---------------------------------------------------------------- */
   var T = [
+    ['จำนวนขายแยกตามสินค้า','Sales quantity by product','各商品销售数量'],
+    ['จำนวนขายออกทั้งหมด (หน่วย)','Total units sold','销售总数量（单位）'],
+    ['สินค้าที่มีรายการ (SKU)','Products with activity (SKU)','有记录的商品（SKU）'],
+    ['จำนวนขายสุทธิ (หน่วย)','Net units sold','净销售数量（单位）'],
+    ['ลูกค้าคืน','Customer returns','客户退货'],
+    ['ขายสุทธิ','Net sold','净销售'],
+    ['ไม่มีรายการขาย ยกเลิก หรือคืนสินค้าในช่วงวันที่เลือก','No sales, cancellations or returns in the selected period','所选期间无销售、取消或退货记录'],
+    ['ขายสุทธิ = ขายออก − ยกเลิก − ลูกค้าคืน โดยนับวันที่เกิดแต่ละรายการตามเวลาไทย จึงอาจติดลบหากคืนสินค้าที่ขายก่อนช่วงนี้','Net sold = sold − cancellations − customer returns, using each event date in Thailand time. It can be negative when earlier sales are returned in this period.','净销售 = 销售 − 取消 − 客户退货，各项按泰国时间的发生日期统计。本期退回此前售出的商品时，净数量可能为负数。'],
+    ['นับจากรายการสินค้าใน WMS ไม่รวมยอดย้อนหลังที่นำเข้าเฉพาะจำนวนเงิน','Based on WMS item movements; historical imports containing amounts only are excluded.','根据 WMS 商品记录统计，不包含仅导入金额的历史数据。'],
     ['นำเข้าเอกสาร','Import documents','导入文件'],
     ['ตรวจรายงาน Shopee และจับคู่ออเดอร์','Review Shopee reports and match orders','核对 Shopee 报表并匹配订单'],
     ['เลขพัสดุ (ถ้ามี)','Tracking number (optional)','运单号（选填）'],

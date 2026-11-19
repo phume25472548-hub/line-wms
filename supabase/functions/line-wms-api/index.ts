@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { documentImport } from './document-import.ts';
+import { productSalesReport } from './product-sales.ts';
 
 const LINE_LOGIN_CHANNEL_ID = "2012121135";
 const APP_NAME = "LINE WMS";
@@ -327,7 +328,10 @@ async function readAction(db: ReturnType<typeof serviceClient>, action: string, 
     const by = keyBy(all.channels.map((c: Row) => ({ channelId:c.channel_id,name:c.channel_name,ordersToday:0,qtyToday:0,orders7d:0,qty7d:0 })), "channelId");
     for (const t of tx || []) { const d = text(t.event_at).slice(0,10); if (d === today) { const q=n(t.quantity_change); if(t.transaction_type==="OUT")todayStats.soldToday-=q; else if(t.transaction_type==="IN")todayStats.inToday+=q; else if(t.transaction_type==="RETURN")todayStats.returnToday+=q; else if(t.transaction_type==="WRITE_OFF")todayStats.writeOffToday-=q; else if(t.transaction_type==="CANCEL")todayStats.cancelToday+=q; else if(t.transaction_type==="ADJUST")todayStats.adjustToday+=q; } }
     for (const o of orders || []) { if(o.order_status==="CANCELLED")continue; const c=by[o.channel_id] ||= {channelId:o.channel_id,name:o.channel_id,ordersToday:0,qtyToday:0,orders7d:0,qty7d:0}; c.orders7d++; c.qty7d+=n(o.total_qty); if(text(o.created_at).slice(0,10)===today){c.ordersToday++;c.qtyToday+=n(o.total_qty);todayStats.ordersToday++;} }
-    return { today, dateFrom:from, dateTo:to, totals, todayStats, lowStock:low.slice(0,50), lowStockCount:low.length,
+    let productSales;
+    try { productSales=await productSalesReport(db,from,to,all.products); }
+    catch(e) { const code=e instanceof Error?e.message:'DATABASE_ERROR';throw new ApiError(code,code==='RESULT_TOO_LARGE'?'ข้อมูลจำนวนขายมีมากเกินไป กรุณาลดช่วงวันที่':code==='INVALID_DATE'?'กรุณาเลือกช่วงวันที่ให้ถูกต้อง':'โหลดจำนวนขายแยกตามสินค้าไม่สำเร็จ',400); }
+    return { today, dateFrom:from, dateTo:to, productSales, totals, todayStats, lowStock:low.slice(0,50), lowStockCount:low.length,
       byChannel:Object.values(by), recent:(tx||[]).slice(0,15).map(txView) };
   }
   if (action === "users.options" || action === "admin.users") {
